@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 
 from ..config import get_config
 from ..db import CorticoSession, TaggingSession
-from ..models import Code, DriftProposal, ProposalScore
+from ..models import Code, CodeRevision, DriftProposal, ProposalScore
 from ..models_cortico import Highlight
+from ..schemas import CodeEdit
 from . import judgments, rules, search_run
-from .codebook_edit import CodeNotFound
+from .codebook_edit import CodeNotFound, edit_code
 from .jev import HttpJevClient, JevClient, JevError, build_keyed_request, parse_keyed_noul
 
 log = logging.getLogger(__name__)
@@ -564,3 +565,176 @@ def fail_orphaned_scores(db_t: Session) -> None:
         proposal.score_status = "failed"
         proposal.score_summary = {**(proposal.score_summary or {}), "error": "The server stopped during the score."}
     db_t.commit()
+
+
+# Deciding on a proposal: accept (optionally edited), dismiss, roll back.
+
+CODE_FIELDS = ("name", "definition", "threshold")
+RULE_FIELDS = ("include", "exclude")
+PART_FIELDS: dict[str, tuple[str, ...]] = {
+    "name": ("name",), "definition": ("definition",), "threshold": ("threshold",), "rules": RULE_FIELDS,
+}
+
+
+class DecisionConflict(RuntimeError):
+    """The proposal or its code is not in a state that allows the decision (409)."""
+
+
+class DecisionInvalid(ValueError):
+    """The request itself is unusable (400)."""
+
+
+def _taken_names(db: Session, code: Code) -> set[str]:
+    return {
+        n.strip().casefold()
+        for n in db.scalars(
+            select(Code.name).where(Code.codebook_id == code.codebook_id, Code.status == "ACTIVE", Code.id != code.id)
+        )
+    }
+
+
+def _check_values(db: Session, code: Code, final: dict) -> dict:
+    """`final` with strings trimmed, or DecisionInvalid."""
+    checked = dict(final)
+    if "name" in final:
+        name = final["name"].strip() if isinstance(final["name"], str) else ""
+        if not name:
+            raise DecisionInvalid("A code name cannot be blank.")
+        if name.casefold() in _taken_names(db, code):
+            raise DecisionInvalid(f"Another active code is already named {name!r}.")
+        checked["name"] = name
+    if "definition" in final:
+        definition = final["definition"].strip() if isinstance(final["definition"], str) else ""
+        if not definition:
+            raise DecisionInvalid("A definition cannot be blank.")
+        checked["definition"] = definition
+    if "threshold" in final:
+        threshold = final["threshold"]
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:
+            raise DecisionInvalid("The threshold must be between 0 and 1.")
+        checked["threshold"] = float(threshold)
+    for field in RULE_FIELDS:
+        if field not in final:
+            continue
+        items = final[field]
+        if not isinstance(items, list) or not all(isinstance(s, str) and s.strip() for s in items):
+            raise DecisionInvalid(f"Each {field} rule must be non-empty text.")
+        if len(items) > MAX_RULES:
+            raise DecisionInvalid(f"At most {MAX_RULES} {field} rules.")
+        checked[field] = [s.strip() for s in items]
+    return checked
+
+
+def _apply(db: Session, code_id: int, values: dict, rules_source: str, proposal_id: int) -> list[int]:
+    """Writes the code fields through edit_code (one code_revision per changed field) and, when
+    `values` has rules, a new code_rules row. Returns the new code_revision ids."""
+    before = db.scalar(select(func.max(CodeRevision.id)).where(CodeRevision.code_id == code_id)) or 0
+    changes = {f: values[f] for f in CODE_FIELDS if f in values}
+    if changes:
+        edit_code(db, code_id, CodeEdit(**changes))
+    if "include" in values:
+        rules.set_rules(db, code_id, values["include"], values["exclude"], source=rules_source, proposal_id=proposal_id)
+    return list(
+        db.scalars(
+            select(CodeRevision.id)
+            .where(CodeRevision.code_id == code_id, CodeRevision.id > before)
+            .order_by(CodeRevision.id)
+        )
+    )
+
+
+def accept(db: Session, proposal_id: int, parts: list[str], values: dict | None = None) -> DriftProposal:
+    """Applies the accepted parts of a suggested proposal, with the researcher's `values`
+    winning over `proposed`. Everything is checked before anything is written."""
+    with search_run._start_lock:  # a score cannot start on this proposal mid-accept
+        proposal = get_proposal(db, proposal_id)
+        if proposal.status != "suggested":
+            raise DecisionConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be accepted.")
+        if proposal.score_status == "running":
+            raise DecisionConflict(f"Proposal {proposal_id} is being tested with Jev; accept it when the test finishes.")
+        parts = list(dict.fromkeys(parts))
+        if not parts:
+            raise DecisionInvalid("Choose at least one part to accept.")
+        values = {k: v for k, v in (values or {}).items() if v is not None}
+        accepted_fields = {f for p in parts for f in PART_FIELDS[p]}
+        stray = sorted(set(values) - accepted_fields)
+        if stray:
+            raise DecisionInvalid(f"Values were given for parts not accepted: {', '.join(stray)}.")
+        proposed = dict(proposal.proposed or {})
+        for part in parts:
+            if not any(f in values or f in proposed for f in PART_FIELDS[part]):
+                raise DecisionInvalid(f"Proposal {proposal_id} has no {part} change to accept.")
+
+        code = db.get(Code, proposal.code_id)
+        current = _base(db, code)
+        final = {
+            f: values[f] if f in values else proposed[f] if f in proposed else current[f]
+            for f in CODE_FIELDS + RULE_FIELDS
+            if f in accepted_fields
+        }
+        final = _check_values(db, code, final)
+        for part in parts:
+            if any(current[f] != proposal.base[f] for f in PART_FIELDS[part]):
+                raise DecisionConflict(
+                    f"The code's {part} changed after proposal {proposal_id} was drafted; "
+                    f"field '{part}' no longer matches the proposal's starting point."
+                )
+        edited = any(final[f] != proposed.get(f, current[f]) for f in values)
+
+        revision_ids = _apply(db, code.id, final, "proposal", proposal.id)
+        proposal.status = "accepted"
+        proposal.applied = {**final, "edited": edited, "revision_ids": revision_ids}
+        proposal.decided_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(proposal)
+        return proposal
+
+
+def dismiss(db: Session, proposal_id: int) -> DriftProposal:
+    proposal = get_proposal(db, proposal_id)
+    if proposal.status != "suggested":
+        raise DecisionConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be dismissed.")
+    proposal.status = "dismissed"
+    proposal.decided_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(proposal)
+    return proposal
+
+
+def rollback(db: Session, proposal_id: int) -> DriftProposal:
+    """Restores the `base` values of the code's newest accepted proposal, provided nothing
+    the proposal applied has been changed since."""
+    proposal = get_proposal(db, proposal_id)
+    newest = db.scalars(
+        select(DriftProposal)
+        .where(DriftProposal.code_id == proposal.code_id, DriftProposal.status == "accepted")
+        .order_by(DriftProposal.id.desc())
+        .limit(1)
+    ).first()
+    if newest is None or newest.id != proposal.id:
+        raise DecisionConflict(
+            f"Proposal {proposal_id} is {proposal.status}; only the code's newest accepted proposal can be rolled back."
+        )
+    applied = dict(proposal.applied or {})
+    code = db.get(Code, proposal.code_id)
+    current = _base(db, code)
+    restore: dict = {}
+    for part, fields in PART_FIELDS.items():
+        if not all(f in applied for f in fields):
+            continue
+        if any(current[f] != applied[f] for f in fields):
+            raise DecisionConflict(
+                f"The code's {part} was changed after proposal {proposal_id} was accepted; "
+                f"field '{part}' no longer matches what the proposal applied."
+            )
+        restore.update({f: proposal.base[f] for f in fields})
+    if "name" in restore and restore["name"].strip().casefold() in _taken_names(db, code):
+        raise DecisionConflict(f"Another active code is now named {restore['name']!r}; field 'name' cannot be restored.")
+
+    revision_ids = _apply(db, code.id, restore, "rollback", proposal.id)
+    proposal.status = "rolled_back"
+    proposal.applied = {**applied, "rollback_revision_ids": revision_ids}
+    proposal.decided_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(proposal)
+    return proposal

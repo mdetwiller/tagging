@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Code, Codebook, CodeRevision, CodeRules, Coding
+from ..models import Code, Codebook, CodeRevision, CodeRules, Coding, DriftProposal
 from ..models_cortico import Highlight
 from .family_notes import current_notes
 from .judgments import agreement, latest_by_pair
@@ -69,6 +69,23 @@ def build_export(db_t: Session, db_c: Session) -> dict:
             }
         )
 
+    proposals: dict[int, list[dict]] = {c: [] for c in code_ids}
+    for p in db_t.scalars(select(DriftProposal).where(DriftProposal.code_id.in_(code_ids)).order_by(DriftProposal.id)):
+        proposals[p.code_id].append(
+            {
+                "id": p.id,
+                "status": p.status,
+                "base": p.base,
+                "proposed": p.proposed,
+                "applied": p.applied,
+                "rationale": p.rationale,
+                "score_summary": p.score_summary,
+                "tokens": p.tokens,
+                "created_at": _iso(p.created_at),
+                "decided_at": _iso(p.decided_at),
+            }
+        )
+
     notes = current_notes(db_t, [c.id for c in codes if c.parent_code_id is None])
 
     earlier = db_t.execute(
@@ -126,6 +143,7 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                     },
                     "rules_history": rules_history[c.id],
                     "agreement": agreement(db_t, c.id),
+                    "proposals": proposals[c.id],
                 }
                 for c in codes
             },

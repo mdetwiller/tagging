@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_config
 from ..db import get_tagging_db
-from ..schemas import DriftRequest
+from ..schemas import AcceptProposalRequest, DriftRequest
 from ..services import drift
 
 router = APIRouter(tags=["drift"])
@@ -60,6 +60,38 @@ def score(proposal_id: int) -> dict:
     except drift.ScoreConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"proposal_id": proposal_id, "score_status": "running"}
+
+
+@router.post("/proposals/{proposal_id}/accept")
+def accept(proposal_id: int, body: AcceptProposalRequest, db: Session = Depends(get_tagging_db)) -> dict:
+    """Applies the chosen parts of a suggested proposal; `values` are the researcher's edits.
+    409 when the proposal is not suggested, is being scored, or a chosen field has changed
+    since the draft."""
+    values = body.values.model_dump(exclude_unset=True) if body.values else None
+    return _decide(lambda: drift.accept(db, proposal_id, list(body.parts), values))
+
+
+@router.post("/proposals/{proposal_id}/dismiss")
+def dismiss(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dict:
+    return _decide(lambda: drift.dismiss(db, proposal_id))
+
+
+@router.post("/proposals/{proposal_id}/rollback")
+def rollback(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dict:
+    """Restores the code's values from before its newest accepted proposal. 409 when a field
+    the proposal applied has been changed since."""
+    return _decide(lambda: drift.rollback(db, proposal_id))
+
+
+def _decide(action) -> dict:
+    try:
+        return drift.serialize_proposal(action())
+    except drift.ProposalNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except drift.DecisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except drift.DecisionInvalid as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/drift/spend")

@@ -57,3 +57,24 @@ class DriftRequest(BaseModel):
     review session that just ended; it is stored on the proposal."""
 
     session_judgments: int = Field(ge=0)
+
+
+class ProposalValues(BaseModel):
+    """The researcher's edits at accept; each wins over the proposal's value. Ranges and
+    duplicates are checked by the service (400), so these are left unconstrained here."""
+
+    model_config = {"extra": "forbid"}
+
+    name: str | None = None
+    definition: str | None = None
+    threshold: float | None = None
+    include: list[str] | None = None
+    exclude: list[str] | None = None
+
+
+class AcceptProposalRequest(BaseModel):
+    """`rules` covers both include and exclude; a list left out of both `proposed` and
+    `values` keeps its current value."""
+
+    parts: list[Literal["name", "definition", "threshold", "rules"]]
+    values: ProposalValues | None = None
