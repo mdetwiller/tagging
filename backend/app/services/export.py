@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import Code, Codebook, CodeRevision, Coding
+from ..models import Code, Codebook, CodeRevision, CodeRules, Coding
 from ..models_cortico import Highlight
 from .family_notes import current_notes
 from .judgments import agreement, latest_by_pair
@@ -55,6 +55,18 @@ def build_export(db_t: Session, db_c: Session) -> dict:
     for rev in db_t.scalars(select(CodeRevision).where(CodeRevision.code_id.in_(code_ids)).order_by(CodeRevision.id)):
         revisions[rev.code_id].append(
             {"field": rev.field, "before": rev.before, "after": rev.after, "created_at": _iso(rev.created_at)}
+        )
+
+    rules_history: dict[int, list[dict]] = {c: [] for c in code_ids}
+    for row in db_t.scalars(select(CodeRules).where(CodeRules.code_id.in_(code_ids)).order_by(CodeRules.id)):
+        rules_history[row.code_id].append(
+            {
+                "include": list(row.include or []),
+                "exclude": list(row.exclude or []),
+                "source": row.source,
+                "proposal_id": row.proposal_id,
+                "created_at": _iso(row.created_at),
+            }
         )
 
     notes = current_notes(db_t, [c.id for c in codes if c.parent_code_id is None])
@@ -107,6 +119,12 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                     "instructions": code_instructions(db_t, c, texts),
                     "threshold": c.threshold,
                     "revisions": revisions[c.id],
+                    # Current rules are the newest history entry; with none, both lists are empty.
+                    "rules": {
+                        "include": rules_history[c.id][-1]["include"] if rules_history[c.id] else [],
+                        "exclude": rules_history[c.id][-1]["exclude"] if rules_history[c.id] else [],
+                    },
+                    "rules_history": rules_history[c.id],
                     "agreement": agreement(db_t, c.id),
                 }
                 for c in codes

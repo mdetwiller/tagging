@@ -67,6 +67,13 @@ class EmbeddingConfig(BaseModel):
         return path
 
 
+class DriftConfig(BaseModel):
+    model: str
+    reasoning_effort: str
+    daily_token_cap: int
+    max_judged_examples: int
+
+
 class Config(BaseModel):
     user_id: int
     cortico_db_path: str
@@ -74,6 +81,7 @@ class Config(BaseModel):
     search: SearchConfig
     jev: JevConfig
     embeddings: EmbeddingConfig
+    drift: DriftConfig
 
     @property
     def cortico_db_abspath(self) -> Path:

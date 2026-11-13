@@ -42,12 +42,24 @@ def build_instructions(
     exemplars: Sequence[CodeExemplar],
     accepted: Sequence[str],
     rejected: Sequence[str],
+    include: Sequence[str] = (),
+    exclude: Sequence[str] = (),
+    name: str | None = None,
+    definition: str | None = None,
 ) -> str:
-    """Noul instructions for one code. `accepted` and `rejected` are newest first."""
-    definition = (code.definition or "").strip()
-    lines = [f"Does this highlight fit the code \"{code.name}\"?"]
+    """Noul instructions for one code. `accepted` and `rejected` are newest first. `name` and
+    `definition`, when given, replace the code's own (to score a proposal)."""
+    name = code.name if name is None else name
+    definition = ((code.definition if definition is None else definition) or "").strip()
+    lines = [f"Does this highlight fit the code \"{name}\"?"]
     if definition:
         lines.append(f"Definition: {definition}")
+    if include:
+        lines.append("Counts when:")
+        lines.extend(f"- {r}" for r in include)
+    if exclude:
+        lines.append("Does not count when:")
+        lines.extend(f"- {r}" for r in exclude)
 
     fits = [_clip(e.text) for e in exemplars] + [_clip(t) for t in accepted[:MAX_HUMAN_EXAMPLES]]
     not_fits = [_clip(t) for t in rejected[:MAX_HUMAN_EXAMPLES]]

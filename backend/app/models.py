@@ -127,3 +127,56 @@ class FamilyNote(Base):
     text = Column(Text, nullable=False, default="")
     created_by = Column(Integer, nullable=False)
     created_at = Column(DateTime, nullable=False, default=_now)
+
+
+class CodeRules(Base):
+    """Append-only: a code's current include/exclude rules are its row with the highest id;
+    with no row, both lists are empty. Rows are never deleted."""
+
+    __tablename__ = "code_rules"
+
+    id = Column(Integer, primary_key=True)
+    code_id = Column(Integer, ForeignKey("code.id"), nullable=False, index=True)
+    include = Column(JSON, nullable=False, default=list)
+    exclude = Column(JSON, nullable=False, default=list)
+    source = Column(String, nullable=False)  # proposal | rollback | user
+    proposal_id = Column(Integer)  # the drift_proposal that set these rules, if any
+    created_at = Column(DateTime, nullable=False, default=_now)
+
+
+class DriftProposal(Base):
+    """`base` and `proposed` are {name, definition, threshold, include, exclude}; `proposed`
+    holds only the fields that change. Rows are never deleted."""
+
+    __tablename__ = "drift_proposal"
+
+    id = Column(Integer, primary_key=True)
+    code_id = Column(Integer, ForeignKey("code.id"), nullable=False, index=True)
+    # suggested | accepted | dismissed | rolled_back | no_change | failed
+    status = Column(String, nullable=False, default="suggested")
+    base = Column(JSON, nullable=False)
+    proposed = Column(JSON, nullable=False)
+    applied = Column(JSON)
+    rationale = Column(Text, nullable=False, default="")
+    disagreements = Column(JSON, nullable=False, default=list)
+    session_judgments = Column(Integer, nullable=False, default=0)
+    ai_metadata = Column(JSON)
+    tokens = Column(Integer, nullable=False, default=0)
+    score_status = Column(String, nullable=False, default="none")  # none | running | done | failed
+    score_summary = Column(JSON)
+    created_at = Column(DateTime, nullable=False, default=_now)
+    decided_at = Column(DateTime)
+
+
+class ProposalScore(Base):
+    """Rows are never deleted."""
+
+    __tablename__ = "proposal_score"
+
+    id = Column(Integer, primary_key=True)
+    proposal_id = Column(Integer, ForeignKey("drift_proposal.id"), nullable=False, index=True)
+    highlight_id = Column(Integer, nullable=False)
+    human = Column(String, nullable=False)  # applied | not_applied
+    current_p = Column(Float)
+    proposed_p = Column(Float)
+    created_at = Column(DateTime, nullable=False, default=_now)

@@ -91,14 +91,34 @@ each code's tagging prompt improves from those judgments.
 
 One JSON file: `codebook.codes[]` (`id, name, description, parent_id, code_type`),
 `codings[]` (every human and AI judgment, with `final`), and an `x_tagging` block (each
-code's instructions, threshold, revision history and agreement, plus `family_notes`: each
-parent code's current non-empty "possibly missing codes" note).
+code's instructions, threshold, revision history, agreement, current include/exclude `rules`
+and `rules_history`, plus `family_notes`: each parent code's current non-empty "possibly
+missing codes" note).
+
+## Drift proposals
+
+Settled with the user on 2026-11-13:
+
+- A proposal may change a code's **name, definition, threshold, include rules ("Counts
+  when") and exclude rules ("Does not count when")**. Rules live in the append-only
+  `code_rules` table (the newest row is current; no row means no rules), because adding a
+  column to `code` is off-limits. Jev's instructions list them after the definition, and a
+  code with no rules gets byte-identical instructions to before.
+- Re-scoring with Jev runs **only on a button** ("Test with Jev"), never automatically.
+- OpenAI use is limited by a **daily token cap** (`drift.daily_token_cap: 500000`, input
+  plus output tokens, local calendar day), not dollars, because no OpenAI price is recorded.
+  A call is refused when today's proposal tokens plus its estimate would exceed the cap.
+- A proposal is drafted **only when the session's code has at least one disagreement** (a
+  highlight whose latest human judgment differs from its latest AI call at the code's
+  threshold).
+
+Model, effort, cap and example limit come from the `drift:` block in `backend/config.yaml`.
 
 ## Milestones
 
 1. Repo and backend, import, embedding, search runs, review screen and bulk actions,
    codebook edits with revisions, agreement, export.
-2. Automatic drift proposals after each session (OpenAI, no warning, daily spend cap in
+2. Automatic drift proposals after each session (OpenAI, no warning, daily token cap in
    config), accept/edit/dismiss, re-score with Jev and show agreement before and after,
    roll back.
 

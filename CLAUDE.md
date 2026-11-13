@@ -12,7 +12,7 @@ probability per code, and lets the researcher accept, reject and apply codes in 
 per-code agreement and a JSON export. The stack is FastAPI + SQLAlchemy (`backend/`) and
 React 19 + Vite + TypeScript (`frontend/`). Source data is `../acp_pipeline_snapshot.db`
 (read-only); everything the app writes goes to `db/tagging.db` and `data/embeddings/`.
-Milestone 1 is complete; milestone 2 (drift proposals) is not started.
+Milestone 1 is complete; milestone 2 (drift proposals) is in progress on the `milestone-2` branch.
 
 ## 2. Development commands
 
@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (126 tests, about 4 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (134 tests, about 4 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
@@ -40,11 +40,11 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 |---|---|
 | Never write to `../acp_pipeline_snapshot.db`. It is opened only as `sqlite:///file:<path>?mode=ro&immutable=1&uri=true` with `PRAGMA query_only = ON`; never `add()` or `commit()` through the Cortico session. | It is the source data, shared with Notes in the Margin. |
 | Snapshot path comes from `cortico_db_path` in `backend/config.yaml`; the tagging DB from `TAGGING_DB_PATH`, default `db/tagging.db`. | One place to repoint both. |
-| Rows in `coding`, `code`, `code_revision`, `highlight_status` and `family_note` are never deleted. Retiring, rejecting and removing are new rows or status changes; a family note's current text is its newest row. | Judgments and codebook edits must stay auditable. |
+| Rows in `coding`, `code`, `code_revision`, `highlight_status`, `family_note`, `code_rules`, `drift_proposal` and `proposal_score` are never deleted. Retiring, rejecting and removing are new rows or status changes; a family note's current text, and a code's current include/exclude rules, are its newest row. | Judgments and codebook edits must stay auditable. |
 | Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first. | The revision history goes into the export. |
 | Every AI row has `is_ai_generated=True`, `status="suggested"`, and `ai_metadata` with at least `model`, `run_id`, `question_instructions_hash`. | Only the user files judgments, and every AI row must be traceable to its run and prompt. |
 | Single user: `config.user_id = 101` is used for `created_by`. | There is no auth. |
-| Thresholds (default 0.5) and search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`, `sample_size`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
+| Thresholds (default 0.5), search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`, `sample_size`) and drift settings (`model`, `reasoning_effort`, `daily_token_cap`, `max_judged_examples`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
 | Jev: `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, `Authorization: Bearer $TYPESAFE_API_KEY`, 5 attempts with backoff from 2 s on 429/500/502/503/504 and network errors. No cost warning. | Copied from Codestormer's `call_jev`; the user chose no warning. |
 | Jev's answer is read from `{"c<code_id>": {"type": "noul", "noul": <0..1>}}`. A missing answer is counted in `missing_answers`, never saved as a null probability. | Found in the live probe of 2026-11-13. |
 | Python modules start with `from __future__ import annotations`. | House style. |

@@ -16,7 +16,7 @@ from ..config import get_config
 from ..db import CorticoSession, TaggingSession
 from ..models import Code, CodeExemplar, Coding, RunHighlight, SearchRun
 from ..models_cortico import Highlight
-from . import embeddings
+from . import embeddings, rules
 from .embeddings import rank_candidates
 from .jev import (
     MAX_HUMAN_EXAMPLES,
@@ -58,9 +58,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _human_examples(db_t: Session, code_id: int, texts: dict[int, str]) -> tuple[list[str], list[str]]:
+def _human_examples(
+    db_t: Session, code_id: int, texts: dict[int, str], exclude_highlight: int | None = None
+) -> tuple[list[str], list[str]]:
     """Texts of the newest highlights whose latest human coding for the code is applied or
-    not_applied, newest first."""
+    not_applied, newest first, leaving out exclude_highlight."""
     rows = db_t.execute(
         select(Coding.highlight_id, Coding.status)
         .where(Coding.code_id == code_id, Coding.is_ai_generated.is_(False))
@@ -69,19 +71,39 @@ def _human_examples(db_t: Session, code_id: int, texts: dict[int, str]) -> tuple
     latest: dict[int, str] = {}
     for hid, status in rows:
         latest.setdefault(hid, status)
+    latest.pop(exclude_highlight, None)
     accepted = [texts[h] for h, s in latest.items() if s == "applied" and h in texts]
     rejected = [texts[h] for h, s in latest.items() if s == "not_applied" and h in texts]
     return accepted[:MAX_HUMAN_EXAMPLES], rejected[:MAX_HUMAN_EXAMPLES]
 
 
-def code_instructions(db_t: Session, code: Code, texts: dict[int, str]) -> str:
+def code_instructions(
+    db_t: Session,
+    code: Code,
+    texts: dict[int, str],
+    exclude_highlight: int | None = None,
+    override: dict | None = None,
+) -> str:
     """The Noul instructions Jev sees for the code now. `texts` maps highlight_id to text and
-    must cover the code's human-judged highlights."""
+    must cover the code's human-judged highlights. `override` is shaped like a drift proposal's
+    `proposed` (any of name, definition, threshold, include, exclude); its keys win over the
+    code's current values. Threshold is not part of the text."""
+    override = override or {}
     exemplars = list(
         db_t.scalars(select(CodeExemplar).where(CodeExemplar.code_id == code.id).order_by(CodeExemplar.id))
     )
-    accepted, rejected = _human_examples(db_t, code.id, texts)
-    return build_instructions(code, exemplars, accepted, rejected)
+    accepted, rejected = _human_examples(db_t, code.id, texts, exclude_highlight)
+    include, exclude = rules.current_rules(db_t, code.id)
+    return build_instructions(
+        code,
+        exemplars,
+        accepted,
+        rejected,
+        include=override.get("include", include),
+        exclude=override.get("exclude", exclude),
+        name=override.get("name"),
+        definition=override.get("definition"),
+    )
 
 
 def _snapshot(db_t: Session, code: Code, texts: dict[int, str]) -> _CodeSnapshot:
