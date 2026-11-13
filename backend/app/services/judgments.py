@@ -151,24 +151,34 @@ def agreement(db: Session, code_id: int) -> dict:
     return {"n": n, **counts, "percent_match": percent_match, "kappa": kappa}
 
 
-def latest_sample_run_id(db: Session, code_id: int) -> int | None:
-    """The newest sample run whose summary covers the code. A run lists every code it judges
-    once its first answer is saved, so a run that failed before then, or one from before the
-    code existed, doesn't hide an earlier sample."""
+def current_samples(db: Session) -> dict[int, tuple[int, dict]]:
+    """code_id -> (run_id, that run's summary entry for the code) for the code's current
+    sample: the newest sample run (summary kind "sample") that is not running and has at least
+    one answered highlight for the code. Older all-codes runs have no kind and are not samples."""
+    out: dict[int, tuple[int, dict]] = {}
     runs = db.execute(
         select(SearchRun.id, SearchRun.summary)
-        .where(SearchRun.scope_code_id.is_(None))
+        .where(SearchRun.scope_code_id.is_(None), SearchRun.status != "running")
         .order_by(SearchRun.id.desc())
     )
     for run_id, summary in runs:
         summary = summary or {}
-        if summary.get("kind") == "sample" and str(code_id) in (summary.get("codes") or {}):
-            return run_id
-    return None
+        if summary.get("kind") != "sample":
+            continue
+        for key, progress in (summary.get("codes") or {}).items():
+            if progress.get("tries", 0) > 0:
+                out.setdefault(int(key), (run_id, progress))
+    return out
+
+
+def latest_sample_run_id(db: Session, code_id: int) -> int | None:
+    """The run id of the code's current sample (see current_samples), or None."""
+    current = current_samples(db).get(code_id)
+    return current[0] if current else None
 
 
 def review(db: Session, db_c: Session, code_id: int) -> dict:
-    """The latest sample run and every find-more run for the code, one row per highlight, with
+    """The code's current sample and every find-more run for the code, one row per highlight, with
     priority found > random > below threshold. Find-more rows include older runs' per-code
     searches (run_highlight rows targeting this code)."""
     code = db.get(Code, code_id)
@@ -182,7 +192,10 @@ def review(db: Session, db_c: Session, code_id: int) -> dict:
             dict.fromkeys(
                 db.scalars(
                     select(Coding.highlight_id)
-                    .where(Coding.run_id == sample_run_id, Coding.is_ai_generated.is_(True))
+                    .where(
+                        Coding.run_id == sample_run_id, Coding.code_id == code_id,
+                        Coding.is_ai_generated.is_(True),
+                    )
                     .order_by(Coding.id)
                 )
             )

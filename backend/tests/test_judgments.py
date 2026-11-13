@@ -239,7 +239,7 @@ def _sample_run(db, judged: list[tuple[tuple[int, int], dict[int, float]]]) -> i
     codes = {c for _, ps in judged for c in ps}
     run = SearchRun(
         scope_code_id=None, status="done",
-        summary={"kind": "sample", "codes": {str(c): {"positives": 0, "tries": 0, "few": True} for c in codes}},
+        summary={"kind": "sample", "codes": {str(c): {"positives": 0, "tries": 1, "few": True} for c in codes}},
     )
     db.add(run)
     db.commit()
@@ -257,7 +257,7 @@ def test_review_combines_sample_and_find_more_runs(client, db, codes, highlights
     a, b = codes["A"], codes["B"]
     h = [x[0] for x in highlights]
     hl = highlights
-    # h2 got no answer for A, but the sample still judged it (for B).
+    # h2 got no answer for A, only for B.
     sample = _sample_run(db, [(hl[0], {a: 0.9, b: 0.1}), (hl[1], {a: 0.2, b: 0.1}), (hl[2], {b: 0.5})])
     older = _run_rows(db, a, [(h[3], "similarity"), (h[4], "random"), (h[0], "similarity")])
     _ai(db, a, hl[3], 0.8, older)
@@ -275,8 +275,9 @@ def test_review_combines_sample_and_find_more_runs(client, db, codes, highlights
     assert body["find_more_run_ids"] == [newer, older]
     assert _ids(body["found"]) == [h[0], h[6], h[3], h[15]]
     assert [r["source"] for r in body["found"]] == ["sample", "search", "search", None]
-    assert _ids(body["random"]) == [h[1], h[2], h[4]]
-    assert [r["source"] for r in body["random"]] == ["sample", "sample", "random"]
+    # h2 has no answer for A, so it is not in A's Random section.
+    assert _ids(body["random"]) == [h[1], h[4]]
+    assert [r["source"] for r in body["random"]] == ["sample", "random"]
     assert _ids(body["below_threshold"]) == [h[5]]
     assert body["below_threshold"][0]["source"] == "search"
     listed = _ids(body["found"]) + _ids(body["random"]) + _ids(body["below_threshold"])
@@ -303,7 +304,7 @@ def test_review_uses_only_latest_sample_run(client, db, codes, highlights):
     _sample_run(db, [(hl[10], {a: 0.1}), (hl[11], {a: 0.8})])
     latest = _sample_run(db, [(hl[20], {a: 0.1})])
     # A sample run that failed before its first answer lists no codes and is skipped.
-    db.add(SearchRun(scope_code_id=None, status="failed", summary={"kind": "sample", "error": "boom"}))
+    db.add(SearchRun(scope_code_id=None, status="failed", summary={"kind": "sample", "codes": {}, "error": "boom"}))
     db.commit()
 
     body = client.get(f"/codes/{a}/review").json()

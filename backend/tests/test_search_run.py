@@ -14,7 +14,8 @@ from app.main import app
 from app.models import Code, Codebook, Coding, RunHighlight, SearchRun
 from app.models_cortico import Highlight
 from app.schemas import CodeEdit
-from app.services import embeddings, search_run
+from app.routers import runs as runs_router
+from app.services import embeddings, judgments, search_run
 from app.services.codebook_edit import edit_code
 from app.services.jev import JevError
 
@@ -366,7 +367,8 @@ def test_sample_missing_answers_not_counted_as_tries(codes, sessions, highlight_
     client = FakeJev(lambda h, c: 0.9 if c == a else None)
     run = _run(sessions, None, client, rank=None)
     assert run.summary["missing_answers"] == 12
-    assert run.summary["codes"][str(b)] == {"positives": 0, "tries": 0, "few": True}
+    # A code with no answers is not listed, so the run is not its current sample.
+    assert str(b) not in run.summary["codes"]
     assert run.summary["codes"][str(a)]["tries"] == 12
 
 
@@ -479,6 +481,7 @@ def test_post_run_in_background(emb_dir, codes, highlight_ids, monkeypatch, conc
 
 
 def test_sample_run_without_embeddings(emb_dir, codes, highlight_ids, monkeypatch, concurrency, sample_size):
+    a = codes["A"]
     client = FakeJev(lambda h, c: 0.0)
     monkeypatch.setattr(search_run, "HttpJevClient", lambda: client)
     with TestClient(app) as c:
@@ -491,7 +494,7 @@ def test_sample_run_without_embeddings(emb_dir, codes, highlight_ids, monkeypatc
     assert body["status"] == "done" and body["requests"] == 12
     assert body["summary"]["kind"] == "sample"
     assert overview["sample_size"] == 12
-    assert overview["sample"]["id"] == run_id
+    assert overview["samples"][str(a)] == {"run_id": run_id, "positives": 0, "tries": 12, "few": True}
 
 
 def test_second_sample_run_409(emb_dir, codes):
@@ -531,7 +534,49 @@ def test_overview_latest_find_more_per_code(codes):
         body = c.get("/runs/overview").json()
     assert body["find_more"][str(a)]["id"] == new_id
     # A pre-sample all-codes run (no kind) is not a sample run.
-    assert (body["sample"] or {}).get("id") != legacy_id
+    assert all(v["run_id"] != legacy_id for v in body["samples"].values())
+
+
+@pytest.mark.parametrize("fail_status", [503, 401])
+def test_failed_sample_without_answers_keeps_previous_sample(
+    codes, sessions, highlight_ids, concurrency, sample_size, fail_status
+):
+    a = codes["A"]
+    db_c, db_t = sessions
+    first = _run(sessions, None, FakeJev(lambda h, c: 0.9 if c == a else 0.0), rank=None)
+    # 503 fails three batches in a row; 401 fails on the first request.
+    failing = FakeJev(lambda h, c: 0.0, fail_on_call=1, fail_status=fail_status)
+    second = search_run.create_run(db_t, None)
+    with pytest.raises(JevError):
+        search_run.run_search(db_c, db_t, second, failing, random.Random(1))
+    db_t.expire_all()
+    assert db_t.get(SearchRun, second).status == "failed"
+    assert len(failing.bodies) == (3 if fail_status == 503 else 1)
+    with TestClient(app) as c:
+        review = c.get(f"/codes/{a}/review").json()
+        overview = c.get("/runs/overview").json()
+    assert review["sample_run_id"] == first.id
+    assert len(review["found"]) == 12
+    assert overview["samples"][str(a)] == {"run_id": first.id, "positives": 12, "tries": 12, "few": False}
+
+
+def test_running_sample_is_not_current(codes, sessions, highlight_ids, concurrency, sample_size):
+    a = codes["A"]
+    db_t = sessions[1]
+    first = _run(sessions, None, FakeJev(lambda h, c: 0.0), rank=None)
+    running = SearchRun(
+        status="running",
+        summary={"kind": "sample", "codes": {str(a): {"positives": 1, "tries": 1, "few": True}}},
+    )
+    db_t.add(running)
+    db_t.commit()
+    # Called directly: a TestClient's startup marks thread-less running runs failed.
+    try:
+        assert judgments.review(db_t, sessions[0], a)["sample_run_id"] == first.id
+        assert runs_router.overview(db_t)["samples"][str(a)]["run_id"] == first.id
+    finally:
+        running.status = "failed"
+        db_t.commit()
 
 
 def test_background_failure_marks_run_failed(emb_dir, codes, monkeypatch, concurrency):

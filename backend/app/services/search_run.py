@@ -302,7 +302,8 @@ def draw_sample(all_ids: list[int], size: int, rng: random.Random) -> list[int]:
 
 def _sample(db_c: Session, db_t: Session, run_id: int, client: JevClient, rng: random.Random) -> None:
     """Judges `search.sample_size` random highlights against every active code. Writes no
-    run_highlight rows; the run's highlights are its AI coding rows."""
+    run_highlight rows; the run's highlights are its AI coding rows. A code is listed in the
+    summary only once Jev has answered for it."""
     cfg = get_config().search
 
     def summarize(j: _Judging) -> dict:
@@ -315,6 +316,7 @@ def _sample(db_c: Session, db_t: Session, run_id: int, client: JevClient, rng: r
                     "few": j.positives[c] < cfg.hard_to_find_below,
                 }
                 for c in j.judge_ids
+                if j.answered[c] > 0
             },
             **_counts(j),
         }

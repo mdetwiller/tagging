@@ -4,7 +4,8 @@ import type { Agreement, Codebook, CodeEdit, CodeOut, RunCodeProgress, RunOvervi
 
 interface Props {
   codebook: Codebook;
-  /** The newest run, polled while it runs, so its counts show before the overview refreshes. */
+  /** The newest run, polled while it runs, so a find-more run's counts show before the
+   * overview refreshes. A running sample shows only in RunControls. */
   run: RunStatus | null;
   overview: RunOverview | null;
   selectedCodeId: number | null;
@@ -50,13 +51,13 @@ export default function CodeList({ codebook, run, overview, selectedCodeId, onSe
     };
   }, [codebook, agreementKey]);
 
-  const sample = newer(overview?.sample, run, run?.summary?.kind === "sample");
   function progressFor(codeId: number): CodeProgress {
     const key = String(codeId);
+    const sample = overview?.samples[key];
     const findMore = newer(overview?.find_more[key], run, run?.scope_code_id === codeId);
-    const findMoreNewer = findMore && (!sample || findMore.id > sample.id);
+    const findMoreNewer = findMore && (!sample || findMore.id > sample.run_id);
     return {
-      sample: sample?.summary?.codes?.[key],
+      sample,
       findMore: findMoreNewer ? findMore.summary?.codes?.[key] : undefined,
     };
   }
@@ -187,7 +188,7 @@ function CodeRow({ code, parents, progress, agreement, selected, onSelect, onEdi
         </button>
         <span className="stats">
           {progress.sample && (
-            <span title="Positives / highlights judged in the latest sample run">
+            <span title="Positives / highlights judged in the current sample run">
               {progress.sample.positives}/{progress.sample.tries}
               {progress.sample.few && (
                 <span className="warn" title="Few positives in the sample">

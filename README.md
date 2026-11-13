@@ -53,10 +53,11 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
    needs current embeddings; renaming a code or editing its definition makes its query stale,
    and Find more returns 409 until you re-embed (cheap, only the stale queries).
 5. Review: accept, reject, or apply codes in bulk, then export one JSON file. A code's review
-   combines the latest sample with every Find more run for the code, listing each highlight
-   once: "Found" (AI probability at or above the code's threshold, or final yes, then final
-   yeses from elsewhere), the random sample (the sample's other highlights and Find more's
-   random picks), and a collapsed "Below threshold" section (Find more's other similarity
+   combines the code's current sample (the newest sample run that is not running and has an
+   answer for the code) with every Find more run for the code, listing each highlight once:
+   "Found" (AI probability at or above the code's threshold, or final yes, then final yeses
+   from elsewhere), the random sample (the sample's other highlights scored for this code,
+   and Find more's random picks), and a collapsed "Below threshold" section (Find more's other similarity
    picks, including unscored ones). Each row is labelled sample, search or random.
 
 ## Jev cost and behaviour
@@ -78,7 +79,7 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 111 tests, about 4 s
+cd backend && .venv/bin/python -m pytest -q        # 114 tests, about 4 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

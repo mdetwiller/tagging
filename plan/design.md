@@ -58,8 +58,10 @@ each code's tagging prompt improves from those judgments.
   candidates (similarity order, with 20% random highlights mixed in) until Jev finds 10
   highlights at or above the threshold, or 200 tries. Fewer than 5 positives flags the code
   "hard to find". It needs current embeddings. Each run's random picks are fresh.
-- The run's kind is stored in its summary (`"kind": "sample" | "find_more"`); a run with no
-  scope code is a sample run. Only one run runs at a time.
+- The run's kind is stored in its summary (`"kind": "sample" | "find_more"`), and a sample
+  run is one whose kind is `"sample"`. Older all-codes runs (no scope code, no kind) are not
+  samples; their per-code picks count as find-more rows. Only one run runs at a time.
+- A code's current sample is the newest sample run that is not running and has at least one answered highlight for that code; the review and the code list both use it, and a running sample shows only in the run status.
 - Candidates are ranked by embedding similarity (`text-embedding-3-small`) between each
   highlight and the code's name, definition and exemplars. Embedding the highlights is a
   one-time paid OpenAI job behind a cost warning (about 1M tokens, about $0.02).
@@ -69,9 +71,10 @@ each code's tagging prompt improves from those judgments.
 
 - Layout A: code list on the left; the selected code's found highlights on the right, then a
   divider and the random-sample highlights.
-- A code's review combines the latest sample run that covered it with every find-more run for
-  it. Each highlight is listed once: Found (latest AI probability at or above the threshold,
-  or final yes), else Random (the sample's other highlights and find-more random picks), else
+- A code's review combines its current sample with every find-more run for it. Each
+  highlight is listed once: Found (latest AI probability at or above the threshold, or final
+  yes), else Random (the sample's other highlights scored for this code, and find-more random
+  picks), else
   Below threshold (find-more similarity picks). Each row shows its source: sample, search or
   random (sample wins).
 - Every row has its own accept and reject; checkboxes plus a bulk bar accept or reject many.

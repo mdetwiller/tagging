@@ -8,7 +8,7 @@ from ..config import get_config
 from ..db import get_tagging_db
 from ..models import SearchRun
 from ..schemas import RunRequest
-from ..services import search_run
+from ..services import judgments, search_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -47,17 +47,18 @@ def latest(db: Session = Depends(get_tagging_db)) -> dict:
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_tagging_db)) -> dict:
-    """The configured sample size, the latest sample run, and the latest find-more run per code
-    (keyed by code id as a string)."""
-    sample = None
+    """The configured sample size, each code's current sample result, and the latest find-more
+    run per code. Both maps are keyed by code id as a string."""
+    samples = {
+        str(code_id): {"run_id": run_id, **progress}
+        for code_id, (run_id, progress) in judgments.current_samples(db).items()
+    }
     find_more: dict[str, dict] = {}
-    for run in db.scalars(select(SearchRun).order_by(SearchRun.id.desc())):
-        if run.scope_code_id is None:
-            if sample is None and (run.summary or {}).get("kind") == search_run.SAMPLE:
-                sample = _serialize_run(run)
-        else:
-            find_more.setdefault(str(run.scope_code_id), _serialize_run(run))
-    return {"sample_size": get_config().search.sample_size, "sample": sample, "find_more": find_more}
+    for run in db.scalars(
+        select(SearchRun).where(SearchRun.scope_code_id.is_not(None)).order_by(SearchRun.id.desc())
+    ):
+        find_more.setdefault(str(run.scope_code_id), _serialize_run(run))
+    return {"sample_size": get_config().search.sample_size, "samples": samples, "find_more": find_more}
 
 
 @router.get("/{run_id}")

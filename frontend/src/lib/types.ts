@@ -95,10 +95,16 @@ export interface RunStatus {
   summary: RunSummary | null;
 }
 
-/** GET /runs/overview. `find_more` is keyed by code id. */
+/** One code's result in its current sample: the newest sample run that is not running and
+ * answered for the code at least once. */
+export interface SampleProgress extends RunCodeProgress {
+  run_id: number;
+}
+
+/** GET /runs/overview. Both maps are keyed by code id. */
 export interface RunOverview {
   sample_size: number;
-  sample: RunStatus | null;
+  samples: Record<string, SampleProgress>;
   find_more: Record<string, RunStatus>;
 }
 
@@ -145,7 +151,7 @@ export type RowSource = "sample" | "search" | "random";
 
 export interface ReviewData {
   code: { id: number; name: string; definition: string; threshold: number; status: CodeStatus };
-  /** The latest sample run that covered this code, or null. */
+  /** The code's current sample run (newest not running, with an answer for the code), or null. */
   sample_run_id: number | null;
   /** Runs with search picks for this code, newest first. */
   find_more_run_ids: number[];
@@ -155,7 +161,7 @@ export interface ReviewData {
   found: Row[];
   /** Find-more similarity picks not found, including unscored ones. */
   below_threshold: Row[];
-  /** The latest sample's highlights and find-more random picks that are not found. */
+  /** The current sample's highlights scored for this code and find-more random picks, not found. */
   random: Row[];
 }
 
