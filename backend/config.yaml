@@ -1,0 +1,24 @@
+# Paths are relative to Tagging/ unless absolute.
+user_id: 101
+cortico_db_path: ../acp_pipeline_snapshot.db
+tagging_db_path: db/tagging.db  # TAGGING_DB_PATH overrides
+
+search:
+  max_tries_per_code: 200
+  target_positives: 10
+  hard_to_find_below: 5
+  random_share: 0.2
+  jev_concurrency: 4
+
+jev:
+  url: https://api.typesafe.ai/v1/systemone
+  model: jev-latest
+  max_retries: 5
+  backoff_start_seconds: 2
+  state_note: "A highlight from a recorded small-group community conversation (the American Conversation Project)."
+
+embeddings:
+  model: text-embedding-3-small
+  dir: data/embeddings  # TAGGING_EMBEDDINGS_DIR overrides
+  batch_size: 256
+  usd_per_million_tokens: 0.02
