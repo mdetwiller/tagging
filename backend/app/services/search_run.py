@@ -18,11 +18,24 @@ from ..models import Code, CodeExemplar, Coding, RunHighlight, SearchRun
 from ..models_cortico import Highlight
 from . import embeddings
 from .embeddings import rank_candidates
-from .jev import MAX_HUMAN_EXAMPLES, HttpJevClient, JevClient, build_instructions, build_request, parse_noul
+from .jev import (
+    MAX_HUMAN_EXAMPLES,
+    HttpJevClient,
+    JevClient,
+    JevError,
+    build_instructions,
+    build_request,
+    parse_noul,
+)
 
 log = logging.getLogger(__name__)
 
 Rank = Callable[[int], list[int]]
+
+# A request refused with one of these will be refused again, so the run stops at once.
+FATAL_JEV_STATUSES = frozenset({400, 401, 403})
+# Batches in which every request failed (after the client's retries) before the run stops.
+MAX_CONSECUTIVE_FAILED_BATCHES = 3
 
 
 class RunConflict(RuntimeError):
@@ -185,6 +198,8 @@ def _search(
     positives = {c: 0 for c in judge_ids}
     tries = {c: 0 for c in targets}
     missing_answers = 0
+    failed_requests = 0
+    failed_batches = 0
     requests = 0
     tokens = 0
     judged: set[int] = set()
@@ -201,6 +216,7 @@ def _search(
                 for c in targets
             },
             "missing_answers": missing_answers,
+            "failed_requests": failed_requests,
         }
 
     remaining = set(targets)
@@ -233,12 +249,18 @@ def _search(
                     )
                     for hid, _, _ in batch
                 ]
-                error: BaseException | None = None
+                error: JevError | None = None
+                batch_failures = 0
                 for (hid, _, _), future in zip(batch, futures):
                     try:
                         response = future.result()
-                    except Exception as exc:
-                        error = error or exc
+                    except JevError as exc:
+                        if exc.status in FATAL_JEV_STATUSES:
+                            raise
+                        log.warning("Run %s: Jev request for highlight %s failed: %s", run_id, hid, exc)
+                        error = exc
+                        batch_failures += 1
+                        failed_requests += 1
                         continue
                     requests += 1
                     tokens += int((response.get("usage") or {}).get("input_tokens") or 0)
@@ -264,7 +286,12 @@ def _search(
                     run = db_t.get(SearchRun, run_id)
                     run.requests, run.tokens_used, run.summary = requests, tokens, summary()
                     db_t.commit()
-                if error is not None:
+                failed_batches = failed_batches + 1 if batch_failures == len(batch) else 0
+                if batch_failures:
+                    run = db_t.get(SearchRun, run_id)
+                    run.summary = summary()
+                    db_t.commit()
+                if failed_batches >= MAX_CONSECUTIVE_FAILED_BATCHES:
                     raise error
 
     run = db_t.get(SearchRun, run_id)

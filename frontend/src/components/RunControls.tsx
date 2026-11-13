@@ -88,6 +88,7 @@ export default function RunControls({ run, onRunChange, selectedCodeId, onRunFin
             {run.requests.toLocaleString()} requests, {run.tokens_used.toLocaleString()} tokens
             {codeCount > 0 && `; ${positives} positives across ${codeCount} codes, ${hardToFind} hard to find`}
             {run.summary?.missing_answers ? `; ${run.summary.missing_answers} missing answers` : ""}
+            {run.summary?.failed_requests ? `; ${run.summary.failed_requests} failed requests` : ""}
           </p>
           {run.summary?.error && <p className="error">{run.summary.error}</p>}
         </div>

@@ -69,6 +69,8 @@ export interface RunCodeProgress {
 export interface RunSummary {
   codes?: Record<string, RunCodeProgress>;
   missing_answers?: number;
+  /** Requests that still failed after the client's retries; the run skipped those highlights. */
+  failed_requests?: number;
   error?: string;
 }
 

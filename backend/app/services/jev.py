@@ -20,7 +20,11 @@ PROBABILITY_FIELDS = ("noul", "probability", "p", "answer")
 
 
 class JevError(RuntimeError):
-    pass
+    """`status` is Jev's HTTP status, or None for a network error or a missing key."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class JevClient(Protocol):
@@ -139,7 +143,7 @@ class HttpJevClient:
                 if resp.status_code == 200:
                     return resp.json()
                 if resp.status_code not in RETRY_STATUSES or last:
-                    raise JevError(f"Jev returned {resp.status_code}: {resp.text[:300]}")
+                    raise JevError(f"Jev returned {resp.status_code}: {resp.text[:300]}", resp.status_code)
             self._sleep(delay)
             delay *= 2
         raise JevError("Jev was not called: max_attempts is below 1.")

@@ -60,6 +60,9 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 - No TypeSafe price is recorded anywhere, and there is deliberately no cost warning for Jev.
 - Retries: 5 attempts in total (`jev.max_attempts`), backoff from 2 s, on 429, 500, 502,
   503, 504 and network errors (`httpx.TransportError`).
+- A request that still fails after its retries is counted in the run's `failed_requests`
+  (shown under the run status) and the run moves on to the next highlight. The run fails at
+  once on 400, 401 or 403, or after 3 batches in a row in which every request failed.
 
 ## Test
 

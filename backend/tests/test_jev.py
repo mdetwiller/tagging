@@ -136,8 +136,9 @@ def test_http_client_gives_up_after_max_attempts():
 def test_http_client_does_not_retry_client_errors():
     sleeps: list[float] = []
     client, seen = _client([400], sleeps)
-    with pytest.raises(jev.JevError, match="400"):
+    with pytest.raises(jev.JevError, match="400") as raised:
         client.judge({"model": "m"})
+    assert raised.value.status == 400
     assert len(seen) == 1
     assert sleeps == []
 

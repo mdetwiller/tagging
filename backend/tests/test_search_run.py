@@ -24,9 +24,11 @@ DIM = 8
 class FakeJev:
     """Answers from a score function of (highlight_id, code_id); None means no answer."""
 
-    def __init__(self, score, fail_on_call: int | None = None, on_call=None):
+    def __init__(self, score, fail_on_call: int | None = None, on_call=None, fail_calls=(), fail_status: int = 503):
         self.score = score
         self.fail_on_call = fail_on_call
+        self.fail_calls = set(fail_calls)
+        self.fail_status = fail_status
         self.on_call = on_call
         self.bodies: list[dict] = []
         self._lock = threading.Lock()
@@ -37,8 +39,8 @@ class FakeJev:
             n = len(self.bodies)
         if self.on_call:
             self.on_call(n)
-        if self.fail_on_call is not None and n >= self.fail_on_call:
-            raise JevError("Jev returned 503: unavailable")
+        if (self.fail_on_call is not None and n >= self.fail_on_call) or n in self.fail_calls:
+            raise JevError(f"Jev returned {self.fail_status}: unavailable", self.fail_status)
         hid = body["state"]["highlight"]["id"]
         answers = {}
         for key in body["questions"]:
@@ -295,6 +297,7 @@ def test_judged_highlights_not_requested_twice(codes, sessions, highlight_ids, c
 
 
 def test_jev_failure_marks_run_failed(codes, sessions, highlight_ids, concurrency):
+    # Every call from the fourth fails, so batches 4, 5 and 6 fail in a row and the run stops.
     a = codes["A"]
     client = FakeJev(lambda h, c: 0.0, fail_on_call=4)
     db_c, db_t = sessions
@@ -307,8 +310,35 @@ def test_jev_failure_marks_run_failed(codes, sessions, highlight_ids, concurrenc
     assert "503" in run.summary["error"]
     assert run.finished_at is not None
     assert run.requests == 3
+    assert len(client.bodies) == 6
+    assert run.summary["failed_requests"] == 3
     rows = db_t.scalars(select(Coding).where(Coding.run_id == run_id)).all()
     assert len(rows) == 6  # three answered highlights x 2 judge codes
+
+
+def test_single_jev_failure_continues(codes, sessions, highlight_ids, concurrency):
+    a = codes["A"]
+    client = FakeJev(lambda h, c: 0.9 if c == a else 0.0, fail_calls={2, 5, 6})
+    run = _run(sessions, a, client, _ranker(highlight_ids))
+    assert run.status == "done"
+    assert run.summary["failed_requests"] == 3
+    assert _summary(run, a) == {"positives": 10, "tries": 13, "hard_to_find": False}
+    assert run.requests == 10
+
+
+def test_jev_401_fails_run_at_once(codes, sessions, highlight_ids, concurrency):
+    a = codes["A"]
+    client = FakeJev(lambda h, c: 0.0, fail_calls={2}, fail_status=401)
+    db_c, db_t = sessions
+    run_id = search_run.create_run(db_t, a)
+    with pytest.raises(JevError):
+        search_run.run_search(db_c, db_t, run_id, client, random.Random(0), rank=_ranker(highlight_ids))
+    db_t.expire_all()
+    run = db_t.get(SearchRun, run_id)
+    assert run.status == "failed"
+    assert "401" in run.summary["error"]
+    assert len(client.bodies) == 2
+    assert run.requests == 1
 
 
 # Background start and routes
