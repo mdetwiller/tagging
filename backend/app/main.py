@@ -6,13 +6,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import models  # noqa: F401  registers tables on Base
-from .db import Base, tagging_engine
-from .routers import codebook, embeddings
+from .db import Base, TaggingSession, tagging_engine
+from .routers import codebook, embeddings, runs
+from .services.search_run import fail_orphaned_runs
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=tagging_engine)
+    with TaggingSession() as db:
+        fail_orphaned_runs(db)
     yield
 
 
@@ -29,6 +32,7 @@ app.add_middleware(
 app.include_router(codebook.router)
 app.include_router(codebook.codes_router)
 app.include_router(embeddings.router)
+app.include_router(runs.router)
 
 
 @app.get("/health")

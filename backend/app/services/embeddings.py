@@ -152,6 +152,16 @@ def _stale_codes(db_t: Session) -> list[Code]:
     return [c for c in _current_active_codes(db_t) if c.query_stale or c.id not in embedded]
 
 
+def stale_code_ids(db_t: Session) -> set[int]:
+    """Active codes of the current codebook with no query vector, or one older than their
+    name or definition."""
+    return {c.id for c in _stale_codes(db_t)}
+
+
+def current_active_codes(db_t: Session) -> list[Code]:
+    return _current_active_codes(db_t)
+
+
 def _code_texts(db_t: Session, codes: list[Code]) -> list[str]:
     texts = []
     for code in codes:

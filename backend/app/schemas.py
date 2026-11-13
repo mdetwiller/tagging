@@ -20,3 +20,9 @@ class EmbedRequest(BaseModel):
     """The embedding job is paid, so it runs only when `confirm` is true."""
 
     confirm: bool = False
+
+
+class RunRequest(BaseModel):
+    """Leave `code_id` out to search for every active code of the current codebook."""
+
+    code_id: int | None = None
