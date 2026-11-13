@@ -75,10 +75,11 @@ export default function App() {
 
   const startSample = useCallback(() => startRun(), [startRun]);
 
+  // Stale code queries (after a rename or definition edit) don't reopen setup: the codebook and
+  // highlight vectors are kept, and only Find more needs the refreshed query.
   const setupIncomplete =
-    codebook === null ||
-    (embedding !== null &&
-      (embedding.highlights_embedded < embedding.highlights_total || embedding.stale_codes > 0));
+    codebook === null || (embedding !== null && embedding.highlights_embedded < embedding.highlights_total);
+  const staleCodes = embedding?.stale_codes ?? 0;
   // The panel stays open after setup completes so the import warnings and tokens used stay readable.
   const [keepSetup, setKeepSetup] = useState(false);
   if (setupIncomplete && !keepSetup) setKeepSetup(true);
@@ -105,6 +106,21 @@ export default function App() {
             onChanged={refreshAll}
             onClose={setupIncomplete ? null : () => setKeepSetup(false)}
           />
+        )}
+        {!setupIncomplete && !keepSetup && codebook && (
+          <section className="panel setup-summary">
+            <p className="muted">
+              Codebook: {codebook.name}.
+              {embedding && ` ${embedding.highlights_embedded.toLocaleString()} highlights embedded.`}
+            </p>
+            {staleCodes > 0 && (
+              <p className="warn">
+                {staleCodes === 1 ? "1 edited code needs" : `${staleCodes} edited codes need`} a new query embedding
+                before Find more works for it.
+              </p>
+            )}
+            <button onClick={() => setKeepSetup(true)}>{staleCodes > 0 ? "Update embeddings" : "Open setup"}</button>
+          </section>
         )}
         <RunControls
           run={run}
