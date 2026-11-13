@@ -81,12 +81,16 @@ def _snapshot(db_t: Session, code: Code, texts: dict[int, str]) -> _CodeSnapshot
     )
 
 
-def _human_judged(db_t: Session, code_id: int) -> set[int]:
-    return set(
-        db_t.scalars(
-            select(Coding.highlight_id).where(Coding.code_id == code_id, Coding.is_ai_generated.is_(False))
+def _human_judged(db_t: Session, code_ids: list[int]) -> dict[int, set[int]]:
+    """Highlights with any human coding, per code."""
+    judged: dict[int, set[int]] = {c: set() for c in code_ids}
+    for code_id, hid in db_t.execute(
+        select(Coding.code_id, Coding.highlight_id).where(
+            Coding.is_ai_generated.is_(False), Coding.code_id.in_(code_ids)
         )
-    )
+    ):
+        judged[code_id].add(hid)
+    return judged
 
 
 def _queue(
@@ -176,7 +180,7 @@ def _search(
     targets = [scope_code_id] if scope_code_id is not None else [s.id for s in judge]
     questions = [(s.id, s.instructions) for s in judge]
     judge_ids = [s.id for s in judge]
-    human_judged = {c: _human_judged(db_t, c) for c in targets}
+    human_judged = _human_judged(db_t, sorted(set(judge_ids) | set(targets)))
 
     positives = {c: 0 for c in judge_ids}
     tries = {c: 0 for c in targets}
@@ -255,7 +259,7 @@ def _search(
                                 },
                             )
                         )
-                        if p >= snap.threshold:
+                        if p >= snap.threshold and hid not in human_judged[code_id]:
                             positives[code_id] += 1
                     run = db_t.get(SearchRun, run_id)
                     run.requests, run.tokens_used, run.summary = requests, tokens, summary()

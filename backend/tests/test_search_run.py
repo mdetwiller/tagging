@@ -160,6 +160,25 @@ def test_other_codes_credit(codes, sessions, highlight_ids, concurrency):
     assert sb["positives"] >= 10 and sb["hard_to_find"] is False
 
 
+def test_other_code_not_credited_for_human_judged(codes, sessions, highlight_ids, concurrency):
+    a, b = codes["A"], codes["B"]
+    db_c, db_t = sessions
+    rank = _ranker(highlight_ids)
+    h = rank(a)[0]
+    db_t.add(Coding(code_id=b, highlight_id=h, conversation_id=1, status="not_applied",
+                    is_ai_generated=False, created_by=101))
+    db_t.commit()
+    # Only (h, B) scores high. A is searched first and judges h, so B sees h only as a credit.
+    client = FakeJev(lambda hid, c: 0.9 if c == b and hid == h else 0.0)
+    run = _run(sessions, None, client, rank)
+    assert _targets(db_t, run.id, a)[0].highlight_id == h
+    assert _summary(run, b)["positives"] == 0
+    ai = db_t.scalars(
+        select(Coding).where(Coding.run_id == run.id, Coding.code_id == b, Coding.highlight_id == h)
+    ).all()
+    assert len(ai) == 1 and ai[0].is_ai_generated and ai[0].ai_probability == 0.9
+
+
 def test_every_fifth_is_random(codes, sessions, highlight_ids, concurrency):
     a = codes["A"]
     client = FakeJev(lambda h, c: 0.0)
