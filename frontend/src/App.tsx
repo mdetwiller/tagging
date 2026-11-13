@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errorDetail, errorStatus } from "./lib/api";
 import type { Codebook, CodeOut, EmbeddingStatus, RunStatus } from "./lib/types";
 import SetupPanel from "./components/SetupPanel";
 import RunControls from "./components/RunControls";
 import CodeList from "./components/CodeList";
+import ReviewPane from "./components/ReviewPane";
 
 function findCode(codes: CodeOut[], id: number | null): CodeOut | null {
   if (id === null) return null;
@@ -15,6 +16,11 @@ function findCode(codes: CodeOut[], id: number | null): CodeOut | null {
   return null;
 }
 
+/** Ends a review session. Milestone 1 only logs; milestone 2 attaches the drift check here. */
+function handleReviewSessionEnd(codeId: number, judgments: number) {
+  console.log(`Review session ended for code ${codeId}: ${judgments} judgments`);
+}
+
 export default function App() {
   // undefined while loading; null when no codebook has been imported.
   const [codebook, setCodebook] = useState<Codebook | null | undefined>(undefined);
@@ -24,6 +30,8 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runsFinished, setRunsFinished] = useState(0);
   const onRunFinished = useCallback(() => setRunsFinished((n) => n + 1), []);
+  const [judgmentsChanged, setJudgmentsChanged] = useState(0);
+  const onJudgmentsChanged = useCallback(() => setJudgmentsChanged((n) => n + 1), []);
 
   const refreshCodebook = useCallback(async () => {
     try {
@@ -62,11 +70,20 @@ export default function App() {
   const [keepSetup, setKeepSetup] = useState(false);
   if (setupIncomplete && !keepSetup) setKeepSetup(true);
   const selected = codebook ? findCode(codebook.codes, selectedCodeId) : null;
+  const activeCodes = useMemo(
+    () => (codebook ? codebook.codes.flatMap((c) => [c, ...c.children]).filter((c) => c.status === "ACTIVE") : []),
+    [codebook]
+  );
 
   return (
     <div className="app">
       <aside className="sidebar">
-        <h1>Tagging</h1>
+        <div className="app-header">
+          <h1>Tagging</h1>
+          <a className="export-link" href={api.exportUrl()} download>
+            Export
+          </a>
+        </div>
         {loadError && <p className="error">Could not reach the backend: {loadError}</p>}
         {(setupIncomplete || keepSetup) && (
           <SetupPanel
@@ -90,13 +107,21 @@ export default function App() {
             selectedCodeId={selectedCodeId}
             onSelect={setSelectedCodeId}
             onEdited={refreshAll}
-            agreementKey={runsFinished}
+            agreementKey={runsFinished + judgmentsChanged}
           />
         )}
       </aside>
       <main className="main">
-        {selected ? (
-          <h2>{selected.name}</h2>
+        {selected && codebook ? (
+          <ReviewPane
+            key={selected.id}
+            codeId={selected.id}
+            codebook={codebook}
+            activeCodes={activeCodes}
+            refreshKey={runsFinished}
+            onChanged={onJudgmentsChanged}
+            onSessionEnd={handleReviewSessionEnd}
+          />
         ) : (
           <p className="placeholder">Select a code</p>
         )}

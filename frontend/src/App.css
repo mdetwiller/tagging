@@ -225,3 +225,167 @@ select {
 .code-editor input[type="number"] {
   width: 90px;
 }
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.export-link {
+  color: #0969da;
+}
+
+.review-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: #57606a;
+  font-variant-numeric: tabular-nums;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  color: #57606a;
+}
+
+.bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: #ddf4ff;
+  border: 1px solid #54aeff;
+  border-radius: 6px;
+}
+
+.row-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.select-all {
+  display: block;
+  margin: 4px 0;
+  color: #57606a;
+}
+
+.divider {
+  margin: 20px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 2px solid #d0d7de;
+  font-weight: 600;
+  color: #57606a;
+}
+
+.hl-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-left: 4px solid #d0d7de;
+  border-radius: 4px;
+}
+
+.hl-row.final-yes {
+  border-left-color: #1a7f37;
+}
+
+.hl-row.final-no {
+  border-left-color: #b42318;
+}
+
+.hl-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.hl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: #57606a;
+  font-variant-numeric: tabular-nums;
+}
+
+.hl-text {
+  margin: 4px 0;
+  cursor: pointer;
+  white-space: pre-wrap;
+}
+
+.hl-text.clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.hl-codes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 0 8px;
+  background: #eaeef2;
+  border-radius: 10px;
+  font-size: 0.85rem;
+}
+
+.chip button {
+  border: none;
+  background: none;
+  padding: 0 6px;
+}
+
+.add-code {
+  font-size: 0.85rem;
+  padding: 0 6px;
+}
+
+.hl-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.hl-actions button {
+  width: 32px;
+}
+
+.hl-actions .accept.on {
+  background: #1a7f37;
+  color: #fff;
+}
+
+.hl-actions .reject.on {
+  background: #b42318;
+  color: #fff;
+}
