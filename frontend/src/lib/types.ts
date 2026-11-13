@@ -248,6 +248,9 @@ export interface Proposal {
   score_summary: ProposalScoreSummary | null;
   created_at: string;
   decided_at: string | null;
+  /** For a suggested proposal, the parts whose live value no longer matches `base`; accepting
+   * them is refused. Empty for any other status. */
+  stale_parts: ProposalPart[];
 }
 
 /** POST /codes/{id}/drift: the drafted (or already open) proposal, or no disagreement. */

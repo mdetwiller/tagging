@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, errorDetail } from "../lib/api";
+import { api, errorDetail, errorStatus } from "../lib/api";
 import type {
   Agreement,
   CodeValues,
@@ -48,6 +48,46 @@ function partsOf(p: Proposal): ProposalPart[] {
   if (p.proposed.threshold !== undefined) parts.push("threshold");
   if (p.proposed.include !== undefined || p.proposed.exclude !== undefined) parts.push("rules");
   return parts;
+}
+
+const PART_FIELDS: Record<ProposalPart, (keyof CodeValues)[]> = {
+  name: ["name"],
+  definition: ["definition"],
+  threshold: ["threshold"],
+  rules: ["include", "exclude"],
+};
+
+function shorten(text: string, max = 60): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function describeRules(include: string[], exclude: string[]): string {
+  const list = (rules: string[], kind: string) =>
+    rules.length === 0
+      ? `no ${kind} rules`
+      : rules.length <= 2
+        ? `${kind} "${rules.map((r) => shorten(r, 40)).join('", "')}"`
+        : `${rules.length} ${kind} rules`;
+  return `${list(include, "include")}, ${list(exclude, "exclude")}`;
+}
+
+/** "<part>: <applied> → <base>" for each part the proposal applied, i.e. what a rollback restores. */
+function rollbackChanges(p: Proposal): string[] {
+  const applied = p.applied ?? {};
+  const lines: string[] = [];
+  for (const part of Object.keys(PART_FIELDS) as ProposalPart[]) {
+    if (!PART_FIELDS[part].every((f) => applied[f] !== undefined)) continue;
+    if (part === "rules") {
+      lines.push(
+        `rules: ${describeRules(applied.include ?? [], applied.exclude ?? [])} → ${describeRules(p.base.include, p.base.exclude)}`
+      );
+    } else if (part === "threshold") {
+      lines.push(`threshold: ${applied.threshold} → ${p.base.threshold}`);
+    } else {
+      lines.push(`${part}: "${shorten(String(applied[part]))}" → "${shorten(String(p.base[part]))}"`);
+    }
+  }
+  return lines;
 }
 
 function formatDate(iso: string): string {
@@ -163,13 +203,16 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
         api.proposal(proposal.id).then(
           (p) => {
             if (cancelled) return;
+            setError(null);
             onUpdated(p);
             if (p.score_status === "running") poll();
           },
           (err) => {
             if (cancelled) return;
             setError(errorDetail(err));
-            poll();
+            const status = errorStatus(err);
+            // A 4xx won't fix itself (the proposal is gone or the request is wrong); stop asking.
+            if (status === null || status < 400 || status >= 500) poll();
           }
         );
       }, POLL_MS);
@@ -206,6 +249,7 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
   const testWithJev = () =>
     act(async () => {
       await api.scoreProposal(proposal.id);
+      onUpdated({ ...proposal, score_status: "running", score_summary: null });
       onUpdated(await api.proposal(proposal.id));
     });
 
@@ -220,8 +264,8 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
     act(async () => {
       const chosen = parts.filter((p) => ticked.has(p));
       const values: Partial<CodeValues> = {};
-      if (ticked.has("name") && name !== initial.name) values.name = name;
-      if (ticked.has("definition") && definition !== initial.definition) values.definition = definition;
+      if (ticked.has("name") && name.trim() !== initial.name.trim()) values.name = name;
+      if (ticked.has("definition") && definition.trim() !== initial.definition.trim()) values.definition = definition;
       if (ticked.has("threshold") && threshold !== initial.threshold) {
         const t = Number(threshold);
         if (threshold.trim() === "" || Number.isNaN(t) || t < 0 || t > 1) {
@@ -248,6 +292,8 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
   const n = proposal.disagreements.length;
   const summary = proposal.score_summary;
   const anyTicked = parts.some((p) => ticked.has(p));
+  const stale = new Set(proposal.stale_parts ?? []);
+  const anyStale = parts.some((p) => stale.has(p));
 
   return (
     <section className="panel proposal">
@@ -269,12 +315,12 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
         </thead>
         <tbody>
           {parts.includes("name") && (
-            <PartRow part="name" label="Name" ticked={ticked} onToggle={toggle} current={base.name}>
+            <PartRow part="name" stale={stale} label="Name" ticked={ticked} onToggle={toggle} current={base.name}>
               <input value={name} onChange={(e) => setName(e.target.value)} disabled={!ticked.has("name")} />
             </PartRow>
           )}
           {parts.includes("definition") && (
-            <PartRow part="definition" label="Definition" ticked={ticked} onToggle={toggle} current={base.definition}>
+            <PartRow part="definition" stale={stale} label="Definition" ticked={ticked} onToggle={toggle} current={base.definition}>
               <textarea
                 rows={4}
                 value={definition}
@@ -284,7 +330,7 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
             </PartRow>
           )}
           {parts.includes("threshold") && (
-            <PartRow part="threshold" label="Threshold" ticked={ticked} onToggle={toggle} current={String(base.threshold)}>
+            <PartRow part="threshold" stale={stale} label="Threshold" ticked={ticked} onToggle={toggle} current={String(base.threshold)}>
               <input
                 type="number"
                 min={0}
@@ -299,6 +345,7 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
           {parts.includes("rules") && (
             <PartRow
               part="rules"
+              stale={stale}
               label="Rules"
               ticked={ticked}
               onToggle={toggle}
@@ -333,6 +380,9 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
           )}
         </tbody>
       </table>
+      {anyStale && (
+        <p className="warn">Accepting will be refused for changed parts; dismiss and end a new session to redraft.</p>
+      )}
       <div className="proposal-actions">
         <button onClick={testWithJev} disabled={busy || scoring}>
           {scoring ? "Testing with Jev…" : "Test with Jev"}
@@ -352,6 +402,8 @@ function SuggestedProposal({ proposal, onUpdated, onRefresh, onDecided, onNotice
 
 interface PartRowProps {
   part: ProposalPart;
+  /** Parts changed on the code since the proposal was drafted. */
+  stale: Set<ProposalPart>;
   label: string;
   ticked: Set<ProposalPart>;
   onToggle: (part: ProposalPart) => void;
@@ -359,13 +411,14 @@ interface PartRowProps {
   children: React.ReactNode;
 }
 
-function PartRow({ part, label, ticked, onToggle, current, children }: PartRowProps) {
+function PartRow({ part, stale, label, ticked, onToggle, current, children }: PartRowProps) {
   return (
     <tr>
       <td>
         <label className="part-tick">
           <input type="checkbox" checked={ticked.has(part)} onChange={() => onToggle(part)} /> {label}
         </label>
+        {stale.has(part) && <p className="warn">changed since drafted</p>}
       </td>
       <td className="part-current">{current}</td>
       <td className="part-proposed">{children}</td>
@@ -460,7 +513,12 @@ function HistoryItem({ proposal, canRollBack, onDecided, onNotice }: HistoryItem
       )}
       {confirming && (
         <div className="confirm">
-          Restore the code's values from before this proposal was accepted?{" "}
+          Restore the code's values from before this proposal was accepted?
+          <ul>
+            {rollbackChanges(proposal).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
           <button onClick={rollBack} disabled={busy}>
             {busy ? "Rolling back…" : "Roll back"}
           </button>{" "}

@@ -51,7 +51,8 @@ export default function App() {
       (list) => {
         if (proposalRequests.current[codeId] === request) setProposals((prev) => ({ ...prev, [codeId]: list }));
       },
-      (err) => setLoadError(errorDetail(err))
+      // One code's proposals failing to load is not a backend outage; the code just shows none.
+      (err) => console.warn(`Could not load proposals for code ${codeId}: ${errorDetail(err)}`)
     );
   }, []);
 
