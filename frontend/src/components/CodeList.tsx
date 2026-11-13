@@ -49,6 +49,8 @@ export default function CodeList({
   const [agreements, setAgreements] = useState<Record<number, Agreement>>({});
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [notesOpen, setNotesOpen] = useState<Set<number>>(new Set());
+  // Notes stay mounted once opened, so a save still in flight when collapsed can report.
+  const [notesMounted, setNotesMounted] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -79,6 +81,7 @@ export default function CodeList({
   const parents = codebook.codes;
 
   function toggleNotes(id: number) {
+    setNotesMounted((prev) => (prev.has(id) ? prev : new Set([...prev, id])));
     setNotesOpen((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -134,8 +137,12 @@ export default function CodeList({
                   <span className="note-dot" aria-label="Has a note" />
                 )}
               </button>
-              {notesOpen.has(parent.id) && (
-                <FamilyNote codeId={parent.id} onSaved={(note) => onNoteSaved(note.code_id, note.text)} />
+              {notesMounted.has(parent.id) && (
+                <FamilyNote
+                  codeId={parent.id}
+                  open={notesOpen.has(parent.id)}
+                  onSaved={(note) => onNoteSaved(note.code_id, note.text)}
+                />
               )}
             </div>
             {!collapsed.has(parent.id) && parent.children.length > 0 && (

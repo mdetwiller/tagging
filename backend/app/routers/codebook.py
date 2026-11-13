@@ -12,7 +12,7 @@ from ..schemas import CodeEdit, FamilyNoteRequest
 from ..services.codebook_edit import CodeEditError, CodeNotFound, edit_code, list_revisions
 from ..services.codebook_import import CodebookFormatError, import_reconciled
 from ..services.export import _iso
-from ..services.family_notes import NotAFamily, NoteCodeNotFound, current_notes, get_note, save_note
+from ..services.family_notes import NotAFamily, NoteConflict, NoteCodeNotFound, current_notes, get_note, save_note
 
 router = APIRouter(prefix="/codebooks", tags=["codebooks"])
 codes_router = APIRouter(prefix="/codes", tags=["codes"])
@@ -166,8 +166,17 @@ def family_note(code_id: int, db: Session = Depends(get_tagging_db)) -> dict:
 @codes_router.put("/{code_id}/note")
 def put_family_note(code_id: int, body: FamilyNoteRequest, db: Session = Depends(get_tagging_db)) -> dict:
     try:
-        return _serialize_note(code_id, save_note(db, code_id, body.text))
+        note = save_note(
+            db,
+            code_id,
+            body.text,
+            check_base="base_updated_at" in body.model_fields_set,
+            base_updated_at=body.base_updated_at,
+        )
+        return _serialize_note(code_id, note)
     except NoteCodeNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except NotAFamily as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except NoteConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

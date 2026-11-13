@@ -70,8 +70,12 @@ export const api = {
     request<CodeOut>(`/codes/${id}`, { method: "PATCH", body: JSON.stringify(changes) }),
   codeRevisions: (id: number) => request<CodeRevision[]>(`/codes/${id}/revisions`),
   familyNote: (id: number) => request<FamilyNote>(`/codes/${id}/note`),
-  saveFamilyNote: (id: number, text: string) =>
-    request<FamilyNote>(`/codes/${id}/note`, { method: "PUT", body: JSON.stringify({ text }) }),
+  /** `baseUpdatedAt` is the `updated_at` the text was based on; a newer note gives a 409. */
+  saveFamilyNote: (id: number, text: string, baseUpdatedAt: string | null) =>
+    request<FamilyNote>(`/codes/${id}/note`, {
+      method: "PUT",
+      body: JSON.stringify({ text, base_updated_at: baseUpdatedAt }),
+    }),
 
   embeddingStatus: () => request<EmbeddingStatus>("/embeddings/status"),
   embed: () => request<EmbedResult>("/embeddings", { method: "POST", body: JSON.stringify({ confirm: true }) }),

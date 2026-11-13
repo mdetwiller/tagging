@@ -64,6 +64,8 @@ export default function ReviewPane({
   const [sessionJudged, setSessionJudged] = useState<Set<number>>(new Set());
   const sessionCount = sessionJudged.size;
   const [noteOpen, setNoteOpen] = useState(false);
+  // The note stays mounted once opened, so a save still in flight when collapsed can report.
+  const [noteMounted, setNoteMounted] = useState(false);
 
   // App remounts this component per code (key={codeId}), so unmounting means leaving the code.
   const sessionRef = useRef({ codeId, count: 0, onSessionEnd });
@@ -219,11 +221,19 @@ export default function ReviewPane({
         <details
           className="family-note-panel"
           open={noteOpen}
-          onToggle={(e) => setNoteOpen(e.currentTarget.open)}
+          onToggle={(e) => {
+            const isOpen = e.currentTarget.open;
+            setNoteOpen(isOpen);
+            if (isOpen) setNoteMounted(true);
+          }}
         >
           <summary>Family notes: {family.name}</summary>
-          {noteOpen && (
-            <FamilyNote codeId={family.id} onSaved={(note) => onNoteSaved(note.code_id, note.text)} />
+          {noteMounted && (
+            <FamilyNote
+              codeId={family.id}
+              open={noteOpen}
+              onSaved={(note) => onNoteSaved(note.code_id, note.text)}
+            />
           )}
         </details>
       )}

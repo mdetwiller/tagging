@@ -43,6 +43,10 @@ class HighlightStatusRequest(BaseModel):
 
 
 class FamilyNoteRequest(BaseModel):
-    """The whole note; it replaces the current one (earlier versions are kept)."""
+    """The whole note; it replaces the current one (earlier versions are kept).
+    `base_updated_at` is the `updated_at` the client loaded (null for no note yet). When it is
+    sent and the note has changed since, the save is refused, so callers must check
+    `model_fields_set` to tell a sent null from an omitted field."""
 
     text: str = Field(max_length=20000)
+    base_updated_at: str | None = None

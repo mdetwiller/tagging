@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,26 @@ class NoteCodeNotFound(LookupError):
 
 class NotAFamily(ValueError):
     pass
+
+
+class NoteConflict(ValueError):
+    pass
+
+
+def _same_version(base: str | None, current: FamilyNote | None) -> bool:
+    if current is None or base is None:
+        return current is None and base is None
+    try:
+        parsed = datetime.fromisoformat(base)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    saved = current.created_at
+    # SQLite drops the tzinfo of the UTC timestamps this app writes, so naive means UTC.
+    if saved.tzinfo is None:
+        saved = saved.replace(tzinfo=timezone.utc)
+    return parsed == saved
 
 
 def _family(db: Session, code_id: int) -> Code:
@@ -47,10 +69,15 @@ def get_note(db: Session, code_id: int) -> FamilyNote | None:
     return current_note(db, code_id)
 
 
-def save_note(db: Session, code_id: int, text: str) -> FamilyNote | None:
-    """Adds a row only when text differs from the current note."""
+def save_note(
+    db: Session, code_id: int, text: str, *, check_base: bool = False, base_updated_at: str | None = None
+) -> FamilyNote | None:
+    """Adds a row only when text differs from the current note. With check_base, refuses the
+    save when the current note is not the version base_updated_at names."""
     _family(db, code_id)
     current = current_note(db, code_id)
+    if check_base and not _same_version(base_updated_at, current):
+        raise NoteConflict("This note changed elsewhere — reload to see the latest")
     if (current.text if current else "") == text:
         return current
     note = FamilyNote(code_id=code_id, text=text, created_by=get_config().user_id)

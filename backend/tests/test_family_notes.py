@@ -115,3 +115,31 @@ def test_export_includes_family_notes(client, codes):
     assert notes == {
         str(codes["P"]): {"name": "P", "text": "Missing: transport access", "updated_at": saved["updated_at"]}
     }
+
+
+def test_put_with_matching_base(client, codes):
+    url = f"/codes/{codes['P']}/note"
+    first = client.put(url, json={"text": "one", "base_updated_at": None})
+    assert first.status_code == 200
+    second = client.put(url, json={"text": "two", "base_updated_at": first.json()["updated_at"]})
+    assert second.status_code == 200
+    assert [r.text for r in _rows(codes["P"])] == ["one", "two"]
+
+
+def test_put_with_stale_base_409(client, codes):
+    url = f"/codes/{codes['P']}/note"
+    first = client.put(url, json={"text": "one"}).json()
+    client.put(url, json={"text": "two", "base_updated_at": first["updated_at"]})
+    stale = client.put(url, json={"text": "three", "base_updated_at": first["updated_at"]})
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == "This note changed elsewhere — reload to see the latest"
+    # A null base means "there was no note", which is stale once one exists.
+    assert client.put(url, json={"text": "four", "base_updated_at": None}).status_code == 409
+    assert [r.text for r in _rows(codes["P"])] == ["one", "two"]
+
+
+def test_put_without_base_still_allowed(client, codes):
+    url = f"/codes/{codes['P']}/note"
+    client.put(url, json={"text": "one"})
+    assert client.put(url, json={"text": "two"}).status_code == 200
+    assert client.get(url).json()["text"] == "two"

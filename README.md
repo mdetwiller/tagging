@@ -64,8 +64,11 @@ Each code family (a top-level code) has a notepad, "Possibly missing codes", for
 seem to be missing from it. Open it under the parent with "Notes" in the code list (a dot
 marks a family with a note), or with "Family notes: <parent>" above a code's review; both
 edit the same note (`GET`/`PUT /codes/{id}/note`). Each changed save adds a `family_note`
-row and the newest wins, so earlier versions are kept. The export carries the current
-non-empty notes in `x_tagging.family_notes`.
+row and the newest wins, so earlier versions are kept. A save names the version it was based
+on (`base_updated_at`); if the note changed elsewhere since, it returns 409 and the page
+offers "Load latest". Unsaved text is kept as a draft in the browser's localStorage and
+restored when the note is reopened. The export carries the current non-empty notes in
+`x_tagging.family_notes`.
 
 ## Jev cost and behaviour
 
@@ -86,7 +89,7 @@ non-empty notes in `x_tagging.family_notes`.
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 123 tests, about 4 s
+cd backend && .venv/bin/python -m pytest -q        # 126 tests, about 4 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

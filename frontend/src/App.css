@@ -463,3 +463,7 @@ select {
   cursor: pointer;
   font-weight: 600;
 }
+
+.family-note[hidden] {
+  display: none;
+}
