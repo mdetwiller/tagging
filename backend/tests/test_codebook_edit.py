@@ -143,6 +143,16 @@ def test_move_to_top_level(client, codes):
     ]
 
 
+def test_blank_name_rejected(client, codes):
+    cid = codes["rc-child-a1"]
+    for name in ("", "   ", "\t\n"):
+        resp = client.patch(f"/codes/{cid}", json={"name": name})
+        assert resp.status_code == 400
+        assert "blank" in resp.json()["detail"]
+    assert _code(cid).name == "Digital Disconnection"
+    assert _revisions(cid) == []
+
+
 def test_threshold_bounds(client, codes):
     cid = codes["rc-child-a1"]
     assert client.patch(f"/codes/{cid}", json={"threshold": 1.2}).status_code == 422

@@ -51,6 +51,8 @@ def edit_code(db: Session, code_id: int, changes: CodeEdit) -> Code:
         value = getattr(changes, field)
         if value is None and field in _NON_NULL:
             continue
+        if field == "name" and not value.strip():
+            raise CodeEditError("A code name cannot be blank.")
         if getattr(code, field) != value:
             wanted[field] = value
 
