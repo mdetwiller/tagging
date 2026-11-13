@@ -158,6 +158,33 @@ def test_accept_while_score_running_is_409(db, setup):
     assert _accept(setup["proposal"], ["threshold"]).status_code == 409
 
 
+def test_accept_on_retired_code_is_409(db, setup):
+    edit_code(db, setup["code"], CodeEdit(status="RETIRED"))
+    revisions, rule_rows = _count(db, CodeRevision, setup["code"]), _count(db, CodeRules, setup["code"])
+    res = _accept(setup["proposal"], ["threshold", "rules"])
+    assert res.status_code == 409 and "retired" in res.json()["detail"]
+    assert _count(db, CodeRevision, setup["code"]) == revisions
+    assert _count(db, CodeRules, setup["code"]) == rule_rows
+    db.expire_all()
+    assert db.get(DriftProposal, setup["proposal"]).status == "suggested"
+
+
+def test_dismiss_while_score_running_is_409(db, setup):
+    db.get(DriftProposal, setup["proposal"]).score_status = "running"
+    db.commit()
+    assert client.post(f"/proposals/{setup['proposal']}/dismiss").status_code == 409
+    db.expire_all()
+    assert db.get(DriftProposal, setup["proposal"]).status == "suggested"
+
+
+def test_accepting_unchanged_rules_writes_no_rules_row(db, setup):
+    rule_rows = _count(db, CodeRules, setup["code"])
+    res = _accept(setup["proposal"], ["rules"], {"include": INCLUDE})
+    assert res.status_code == 200, res.text
+    assert _count(db, CodeRules, setup["code"]) == rule_rows
+    assert res.json()["applied"]["include"] == INCLUDE
+
+
 def test_unknown_proposal_is_404():
     assert _accept(999999, ["threshold"]).status_code == 404
     assert client.post("/proposals/999999/dismiss").status_code == 404

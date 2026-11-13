@@ -632,7 +632,7 @@ def _apply(db: Session, code_id: int, values: dict, rules_source: str, proposal_
     changes = {f: values[f] for f in CODE_FIELDS if f in values}
     if changes:
         edit_code(db, code_id, CodeEdit(**changes))
-    if "include" in values:
+    if "include" in values and (values["include"], values["exclude"]) != rules.current_rules(db, code_id):
         rules.set_rules(db, code_id, values["include"], values["exclude"], source=rules_source, proposal_id=proposal_id)
     return list(
         db.scalars(
@@ -648,6 +648,9 @@ def accept(db: Session, proposal_id: int, parts: list[str], values: dict | None 
     winning over `proposed`. Everything is checked before anything is written."""
     with search_run._start_lock:  # a score cannot start on this proposal mid-accept
         proposal = get_proposal(db, proposal_id)
+        code = db.get(Code, proposal.code_id)
+        if code.status != "ACTIVE":
+            raise DecisionConflict(f"Code {code.id} is {code.status.lower()}; a proposal for it cannot be accepted.")
         if proposal.status != "suggested":
             raise DecisionConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be accepted.")
         if proposal.score_status == "running":
@@ -665,7 +668,6 @@ def accept(db: Session, proposal_id: int, parts: list[str], values: dict | None 
             if not any(f in values or f in proposed for f in PART_FIELDS[part]):
                 raise DecisionInvalid(f"Proposal {proposal_id} has no {part} change to accept.")
 
-        code = db.get(Code, proposal.code_id)
         current = _base(db, code)
         final = {
             f: values[f] if f in values else proposed[f] if f in proposed else current[f]
@@ -691,14 +693,17 @@ def accept(db: Session, proposal_id: int, parts: list[str], values: dict | None 
 
 
 def dismiss(db: Session, proposal_id: int) -> DriftProposal:
-    proposal = get_proposal(db, proposal_id)
-    if proposal.status != "suggested":
-        raise DecisionConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be dismissed.")
-    proposal.status = "dismissed"
-    proposal.decided_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(proposal)
-    return proposal
+    with search_run._start_lock:  # a score cannot start on this proposal mid-dismiss
+        proposal = get_proposal(db, proposal_id)
+        if proposal.status != "suggested":
+            raise DecisionConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be dismissed.")
+        if proposal.score_status == "running":
+            raise DecisionConflict(f"Proposal {proposal_id} is being tested with Jev; dismiss it when the test finishes.")
+        proposal.status = "dismissed"
+        proposal.decided_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(proposal)
+        return proposal
 
 
 def rollback(db: Session, proposal_id: int) -> DriftProposal:
