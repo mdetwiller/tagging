@@ -43,6 +43,7 @@ class SearchConfig(BaseModel):
     hard_to_find_below: int
     random_share: float
     jev_concurrency: int
+    sample_size: int
 
 
 class JevConfig(BaseModel):

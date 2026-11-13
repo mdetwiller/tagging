@@ -23,7 +23,8 @@ class EmbedRequest(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """Leave `code_id` out to search for every active code of the current codebook."""
+    """Leave `code_id` out for a sample run (random highlights judged against every active
+    code); give it for a find-more run for that code."""
 
     code_id: int | None = None
 

@@ -92,6 +92,15 @@ def concurrency(monkeypatch):
     return set_to
 
 
+@pytest.fixture
+def sample_size(monkeypatch):
+    def set_to(n: int) -> None:
+        monkeypatch.setattr(get_config().search, "sample_size", n)
+
+    set_to(12)
+    return set_to
+
+
 def _ranker(highlight_ids: list[int]):
     """Each code ranks every highlight, in a code-specific but fixed order."""
 
@@ -104,7 +113,10 @@ def _ranker(highlight_ids: list[int]):
 def _run(sessions, scope: int | None, client, rank) -> SearchRun:
     db_c, db_t = sessions
     run_id = search_run.create_run(db_t, scope)
-    search_run.run_search(db_c, db_t, run_id, client, random.Random(0), rank=rank)
+    if rank is None:
+        search_run.run_search(db_c, db_t, run_id, client, random.Random(0))
+    else:
+        search_run.run_search(db_c, db_t, run_id, client, random.Random(0), rank=rank)
     db_t.expire_all()
     return db_t.get(SearchRun, run_id)
 
@@ -128,6 +140,7 @@ def test_stops_at_ten_positives(codes, sessions, highlight_ids, concurrency):
     client = FakeJev(lambda h, c: 0.9 if c == a else 0.0)
     run = _run(sessions, a, client, _ranker(highlight_ids))
     assert run.status == "done"
+    assert run.summary["kind"] == "find_more"
     assert _summary(run, a) == {"positives": 10, "tries": 10, "hard_to_find": False}
     assert len(_targets(sessions[1], run.id, a)) == 10
     assert run.requests == 10
@@ -148,37 +161,6 @@ def test_stops_at_200_tries(codes, sessions, highlight_ids, concurrency):
     client = FakeJev(lambda h, c: 0.1)
     run = _run(sessions, a, client, _ranker(highlight_ids))
     assert _summary(run, a) == {"positives": 0, "tries": 200, "hard_to_find": True}
-
-
-def test_other_codes_credit(codes, sessions, highlight_ids, concurrency):
-    a, b = codes["A"], codes["B"]
-    # B fires on every fourth highlight, A on none. A is searched first (tie on 0, lower id).
-    fires_b = set(highlight_ids[::4])
-    client = FakeJev(lambda h, c: 0.9 if c == b and h in fires_b else 0.0)
-    run = _run(sessions, None, client, _ranker(highlight_ids))
-    sa, sb = _summary(run, a), _summary(run, b)
-    assert sa["tries"] == 200 and sa["hard_to_find"] is True
-    assert sb["tries"] == 0
-    assert sb["positives"] >= 10 and sb["hard_to_find"] is False
-
-
-def test_other_code_not_credited_for_human_judged(codes, sessions, highlight_ids, concurrency):
-    a, b = codes["A"], codes["B"]
-    db_c, db_t = sessions
-    rank = _ranker(highlight_ids)
-    h = rank(a)[0]
-    db_t.add(Coding(code_id=b, highlight_id=h, conversation_id=1, status="not_applied",
-                    is_ai_generated=False, created_by=101))
-    db_t.commit()
-    # Only (h, B) scores high. A is searched first and judges h, so B sees h only as a credit.
-    client = FakeJev(lambda hid, c: 0.9 if c == b and hid == h else 0.0)
-    run = _run(sessions, None, client, rank)
-    assert _targets(db_t, run.id, a)[0].highlight_id == h
-    assert _summary(run, b)["positives"] == 0
-    ai = db_t.scalars(
-        select(Coding).where(Coding.run_id == run.id, Coding.code_id == b, Coding.highlight_id == h)
-    ).all()
-    assert len(ai) == 1 and ai[0].is_ai_generated and ai[0].ai_probability == 0.9
 
 
 def test_every_fifth_is_random(codes, sessions, highlight_ids, concurrency):
@@ -268,34 +250,6 @@ def test_ai_rows_are_suggested_with_metadata(codes, sessions, highlight_ids, con
         assert h == hashlib.sha256(sent[f"c{code_id}"]["instructions"].encode()).hexdigest()
 
 
-def test_retire_during_run_uses_snapshot(codes, sessions, highlight_ids, concurrency):
-    a, b = codes["A"], codes["B"]
-
-    def retire_b(n: int) -> None:
-        if n == 3:
-            with TaggingSession() as s:
-                edit_code(s, b, CodeEdit(status="RETIRED"))
-
-    client = FakeJev(lambda h, c: 0.0, on_call=retire_b)
-    run = _run(sessions, None, client, _ranker(highlight_ids))
-    assert run.status == "done"
-    db_t = sessions[1]
-    assert db_t.get(Code, b).status == "RETIRED"
-    b_rows = db_t.scalars(select(Coding).where(Coding.run_id == run.id, Coding.code_id == b)).all()
-    assert len(b_rows) == 400  # B judged on every request, searched as a target too
-    assert _summary(run, b)["tries"] == 200
-
-
-def test_judged_highlights_not_requested_twice(codes, sessions, highlight_ids, concurrency):
-    client = FakeJev(lambda h, c: 0.0)
-    # Both codes rank identically, so B's queue starts with highlights A already judged.
-    rank = lambda code_id: list(highlight_ids)  # noqa: E731
-    run = _run(sessions, None, client, rank)
-    sent = [b["state"]["highlight"]["id"] for b in client.bodies]
-    assert len(sent) == len(set(sent)) == 400
-    assert run.requests == 400
-
-
 def test_jev_failure_marks_run_failed(codes, sessions, highlight_ids, concurrency):
     # Every call from the fourth fails, so batches 4, 5 and 6 fail in a row and the run stops.
     a = codes["A"]
@@ -341,6 +295,121 @@ def test_jev_401_fails_run_at_once(codes, sessions, highlight_ids, concurrency):
     assert run.requests == 1
 
 
+# Sample runs
+
+
+def _sampled(highlight_ids: list[int], n: int) -> list[int]:
+    """The highlights a sample run with random.Random(0) draws, as _run uses."""
+    return search_run.draw_sample(highlight_ids, n, random.Random(0))
+
+
+def test_sample_judges_sample_size_against_all_codes(codes, sessions, highlight_ids, concurrency, sample_size):
+    concurrency(4)
+    a, b = codes["A"], codes["B"]
+    client = FakeJev(lambda h, c: 0.0)
+    run = _run(sessions, None, client, rank=None)
+    db_t = sessions[1]
+    assert run.status == "done"
+    assert run.scope_code_id is None and run.summary["kind"] == "sample"
+    sent = [body["state"]["highlight"]["id"] for body in client.bodies]
+    assert sorted(sent) == sorted(_sampled(highlight_ids, 12))
+    assert len(set(sent)) == 12
+    assert all(set(body["questions"]) == {f"c{a}", f"c{b}"} for body in client.bodies)
+    rows = db_t.scalars(select(Coding).where(Coding.run_id == run.id)).all()
+    assert len(rows) == 24
+    assert db_t.scalars(select(RunHighlight).where(RunHighlight.run_id == run.id)).first() is None
+    assert run.requests == 12 and run.tokens_used == 84
+    assert run.summary["codes"] == {
+        str(a): {"positives": 0, "tries": 12, "few": True},
+        str(b): {"positives": 0, "tries": 12, "few": True},
+    }
+
+
+def test_draw_sample_takes_all_when_snapshot_is_smaller():
+    ids = [3, 1, 2]
+    assert sorted(search_run.draw_sample(ids, 200, random.Random(0))) == [1, 2, 3]
+    assert len(search_run.draw_sample(list(range(50)), 7, random.Random(0))) == 7
+
+
+def test_sample_is_fresh_each_run(codes, sessions, highlight_ids, concurrency, sample_size):
+    client = FakeJev(lambda h, c: 0.0)
+    db_c, db_t = sessions
+    for seed in (1, 2):
+        run_id = search_run.create_run(db_t, None)
+        search_run.run_search(db_c, db_t, run_id, client, random.Random(seed))
+    sent = [body["state"]["highlight"]["id"] for body in client.bodies]
+    assert sent[:12] != sent[12:]
+
+
+def test_sample_positives_and_few_skip_human_judged(codes, sessions, highlight_ids, concurrency, sample_size):
+    a, b = codes["A"], codes["B"]
+    db_t = sessions[1]
+    picked = _sampled(highlight_ids, 12)
+    db_t.add(Coding(code_id=a, highlight_id=picked[0], conversation_id=1, status="not_applied",
+                    is_ai_generated=False, created_by=101))
+    db_t.commit()
+    # A fires on every highlight, B on three; one of A's is already human-judged.
+    fires_b = set(picked[:3])
+    client = FakeJev(lambda h, c: 0.9 if c == a or (c == b and h in fires_b) else 0.1)
+    run = _run(sessions, None, client, rank=None)
+    assert run.summary["codes"][str(a)] == {"positives": 11, "tries": 12, "few": False}
+    assert run.summary["codes"][str(b)] == {"positives": 3, "tries": 12, "few": True}
+    # The human-judged highlight still gets its AI row.
+    ai = db_t.scalars(
+        select(Coding).where(Coding.run_id == run.id, Coding.code_id == a, Coding.highlight_id == picked[0])
+    ).all()
+    assert len(ai) == 1 and ai[0].ai_probability == 0.9
+
+
+def test_sample_missing_answers_not_counted_as_tries(codes, sessions, highlight_ids, concurrency, sample_size):
+    a, b = codes["A"], codes["B"]
+    client = FakeJev(lambda h, c: 0.9 if c == a else None)
+    run = _run(sessions, None, client, rank=None)
+    assert run.summary["missing_answers"] == 12
+    assert run.summary["codes"][str(b)] == {"positives": 0, "tries": 0, "few": True}
+    assert run.summary["codes"][str(a)]["tries"] == 12
+
+
+def test_sample_single_failure_continues(codes, sessions, highlight_ids, concurrency, sample_size):
+    client = FakeJev(lambda h, c: 0.0, fail_calls={2, 5})
+    run = _run(sessions, None, client, rank=None)
+    assert run.status == "done"
+    assert run.summary["failed_requests"] == 2
+    assert run.requests == 10
+    assert len(client.bodies) == 12
+
+
+def test_sample_fails_after_three_failed_batches(codes, sessions, highlight_ids, concurrency, sample_size):
+    client = FakeJev(lambda h, c: 0.0, fail_on_call=4)
+    db_c, db_t = sessions
+    run_id = search_run.create_run(db_t, None)
+    with pytest.raises(JevError):
+        search_run.run_search(db_c, db_t, run_id, client, random.Random(0))
+    db_t.expire_all()
+    run = db_t.get(SearchRun, run_id)
+    assert run.status == "failed"
+    assert run.summary["kind"] == "sample" and "503" in run.summary["error"]
+    assert run.requests == 3 and len(client.bodies) == 6
+
+
+def test_retire_during_sample_uses_snapshot(codes, sessions, highlight_ids, concurrency, sample_size):
+    a, b = codes["A"], codes["B"]
+
+    def retire_b(n: int) -> None:
+        if n == 3:
+            with TaggingSession() as s:
+                edit_code(s, b, CodeEdit(status="RETIRED"))
+
+    client = FakeJev(lambda h, c: 0.0, on_call=retire_b)
+    run = _run(sessions, None, client, rank=None)
+    assert run.status == "done"
+    db_t = sessions[1]
+    assert db_t.get(Code, b).status == "RETIRED"
+    b_rows = db_t.scalars(select(Coding).where(Coding.run_id == run.id, Coding.code_id == b)).all()
+    assert len(b_rows) == 12
+    assert run.summary["codes"][str(b)]["tries"] == 12
+
+
 # Background start and routes
 
 
@@ -368,9 +437,9 @@ def _finish(run_id: int) -> None:
     search_run.join(run_id, timeout=30)
 
 
-def test_run_without_embeddings_409(emb_dir, codes):
+def test_find_more_without_embeddings_409(emb_dir, codes):
     with TestClient(app) as c:
-        resp = c.post("/runs", json={})
+        resp = c.post("/runs", json={"code_id": codes["A"]})
     assert resp.status_code == 409
     assert "embed" in resp.json()["detail"].lower()
 
@@ -404,8 +473,65 @@ def test_post_run_in_background(emb_dir, codes, highlight_ids, monkeypatch, conc
         latest = c.get("/runs/latest").json()
     assert body["status"] == "done"
     assert body["requests"] == 10 and body["tokens_used"] == 70
+    assert body["summary"]["kind"] == "find_more"
     assert body["summary"]["codes"][str(a)] == {"positives": 10, "tries": 10, "hard_to_find": False}
     assert latest["id"] == run_id
+
+
+def test_sample_run_without_embeddings(emb_dir, codes, highlight_ids, monkeypatch, concurrency, sample_size):
+    client = FakeJev(lambda h, c: 0.0)
+    monkeypatch.setattr(search_run, "HttpJevClient", lambda: client)
+    with TestClient(app) as c:
+        resp = c.post("/runs", json={})
+        assert resp.status_code == 202, resp.text
+        run_id = resp.json()["run_id"]
+        _finish(run_id)
+        body = c.get(f"/runs/{run_id}").json()
+        overview = c.get("/runs/overview").json()
+    assert body["status"] == "done" and body["requests"] == 12
+    assert body["summary"]["kind"] == "sample"
+    assert overview["sample_size"] == 12
+    assert overview["sample"]["id"] == run_id
+
+
+def test_second_sample_run_409(emb_dir, codes):
+    with TestClient(app) as c, TaggingSession() as s:
+        running = SearchRun(status="running")
+        s.add(running)
+        s.commit()
+        try:
+            resp = c.post("/runs", json={})
+            assert resp.status_code == 409
+            assert "already running" in resp.json()["detail"]
+        finally:
+            running.status = "failed"
+            s.commit()
+
+
+def test_sample_run_without_active_codes_409():
+    with TaggingSession() as s:
+        s.add(Codebook(name="empty"))
+        s.commit()
+    with TestClient(app) as c:
+        resp = c.post("/runs", json={})
+    assert resp.status_code == 409
+    assert "no active codes" in resp.json()["detail"]
+
+
+def test_overview_latest_find_more_per_code(codes):
+    a = codes["A"]
+    with TaggingSession() as s:
+        old = SearchRun(scope_code_id=a, status="done", summary={"kind": "find_more"})
+        new = SearchRun(scope_code_id=a, status="done", summary={"kind": "find_more"})
+        legacy = SearchRun(scope_code_id=None, status="done", summary={"codes": {}})
+        s.add_all([old, new, legacy])
+        s.commit()
+        new_id, legacy_id = new.id, legacy.id
+    with TestClient(app) as c:
+        body = c.get("/runs/overview").json()
+    assert body["find_more"][str(a)]["id"] == new_id
+    # A pre-sample all-codes run (no kind) is not a sample run.
+    assert (body["sample"] or {}).get("id") != legacy_id
 
 
 def test_background_failure_marks_run_failed(emb_dir, codes, monkeypatch, concurrency):
@@ -421,6 +547,7 @@ def test_background_failure_marks_run_failed(emb_dir, codes, monkeypatch, concur
         body = c.get(f"/runs/{run_id}").json()
     assert body["status"] == "failed"
     assert "TYPESAFE_API_KEY" in body["summary"]["error"]
+    assert body["summary"]["kind"] == "find_more"
 
 
 def test_post_run_unknown_or_retired_code(emb_dir, codes):

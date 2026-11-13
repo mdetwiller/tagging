@@ -9,6 +9,7 @@ search:
   hard_to_find_below: 5
   random_share: 0.2  # every round(1/share)-th slot is random, so only shares like 0.2, 0.25 or 0.5 are exact
   jev_concurrency: 4
+  sample_size: 200  # highlights a sample run judges against every active code
 
 jev:
   url: https://api.typesafe.ai/v1/systemone

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import get_config
 from ..db import get_tagging_db
 from ..models import SearchRun
 from ..schemas import RunRequest
@@ -42,6 +43,21 @@ def latest(db: Session = Depends(get_tagging_db)) -> dict:
     if run is None:
         raise HTTPException(status_code=404, detail="No search runs yet.")
     return _serialize_run(run)
+
+
+@router.get("/overview")
+def overview(db: Session = Depends(get_tagging_db)) -> dict:
+    """The configured sample size, the latest sample run, and the latest find-more run per code
+    (keyed by code id as a string)."""
+    sample = None
+    find_more: dict[str, dict] = {}
+    for run in db.scalars(select(SearchRun).order_by(SearchRun.id.desc())):
+        if run.scope_code_id is None:
+            if sample is None and (run.summary or {}).get("kind") == search_run.SAMPLE:
+                sample = _serialize_run(run)
+        else:
+            find_more.setdefault(str(run.scope_code_id), _serialize_run(run))
+    return {"sample_size": get_config().search.sample_size, "sample": sample, "find_more": find_more}
 
 
 @router.get("/{run_id}")

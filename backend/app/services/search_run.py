@@ -141,8 +141,19 @@ def _queue(
             return
 
 
+SAMPLE = "sample"
+FIND_MORE = "find_more"
+
+
+def run_kind(scope_code_id: int | None) -> str:
+    return SAMPLE if scope_code_id is None else FIND_MORE
+
+
 def create_run(db_t: Session, scope_code_id: int | None) -> int:
-    run = SearchRun(scope_code_id=scope_code_id, status="running", requests=0, tokens_used=0)
+    run = SearchRun(
+        scope_code_id=scope_code_id, status="running", requests=0, tokens_used=0,
+        summary={"kind": run_kind(scope_code_id)},
+    )
     db_t.add(run)
     db_t.commit()
     return run.id
@@ -156,10 +167,15 @@ def run_search(
     rng: random.Random,
     rank: Rank = rank_candidates,
 ) -> None:
-    """Runs the search for an existing `running` SearchRun. On any error the run is marked
-    failed, rows already committed stay, and the error is re-raised."""
+    """Runs an existing `running` SearchRun: a sample run when it has no scope code, else a
+    find-more run for that code. On any error the run is marked failed, rows already
+    committed stay, and the error is re-raised."""
     try:
-        _search(db_c, db_t, run_id, client, rng, rank)
+        run = db_t.get(SearchRun, run_id)
+        if run.scope_code_id is None:
+            _sample(db_c, db_t, run_id, client, rng)
+        else:
+            _find_more(db_c, db_t, run_id, run.scope_code_id, client, rng, rank)
     except Exception as exc:
         db_t.rollback()
         run = db_t.get(SearchRun, run_id)
@@ -170,135 +186,195 @@ def run_search(
         raise
 
 
-def _search(
-    db_c: Session, db_t: Session, run_id: int, client: JevClient, rng: random.Random, rank: Rank
-) -> None:
-    config = get_config()
-    cfg, model, user_id = config.search, config.jev.model, config.user_id
-    run = db_t.get(SearchRun, run_id)
-    scope_code_id = run.scope_code_id
+class _Judging:
+    """The request and write loop both run kinds share: one Jev request per highlight against
+    every active code, one AI coding row per answer, a commit per highlight, and the failure
+    rules. `summarize` builds the run's summary from this object."""
 
-    highlights = {
-        hid: (text, conversation_id)
-        for hid, text, conversation_id in db_c.execute(
-            select(Highlight.id, Highlight.text, Highlight.conversation_id).order_by(Highlight.id)
-        )
-    }
-    texts = {hid: text for hid, (text, _) in highlights.items()}
-    all_ids = list(highlights)
+    def __init__(
+        self,
+        db_c: Session,
+        db_t: Session,
+        run_id: int,
+        client: JevClient,
+        pool: ThreadPoolExecutor,
+        extra_code_ids: list[int],
+        summarize: Callable[[_Judging], dict],
+    ) -> None:
+        config = get_config()
+        self.db_t, self.run_id, self.client, self.pool = db_t, run_id, client, pool
+        self.model, self.user_id = config.jev.model, config.user_id
+        self.summarize = summarize
+        self.highlights = {
+            hid: (text, conversation_id)
+            for hid, text, conversation_id in db_c.execute(
+                select(Highlight.id, Highlight.text, Highlight.conversation_id).order_by(Highlight.id)
+            )
+        }
+        self.all_ids = list(self.highlights)
+        texts = {hid: text for hid, (text, _) in self.highlights.items()}
+        # Snapshotted once; codes retired mid-run keep being judged and written under these ids.
+        judge = [_snapshot(db_t, c, texts) for c in embeddings.current_active_codes(db_t)]
+        self.by_id = {s.id: s for s in judge}
+        self.judge_ids = [s.id for s in judge]
+        self.questions = [(s.id, s.instructions) for s in judge]
+        counted = sorted(set(self.judge_ids) | set(extra_code_ids))
+        self.human_judged = _human_judged(db_t, counted)
+        # Positives credit only highlights not already human-judged for the code.
+        self.positives = {c: 0 for c in counted}
+        # Highlights Jev answered for the code in this run.
+        self.answered = {c: 0 for c in counted}
+        self.missing_answers = 0
+        self.failed_requests = 0
+        self.failed_batches = 0
+        self.requests = 0
+        self.tokens = 0
 
-    # Snapshotted once; codes retired mid-run keep being judged and written under these ids.
-    judge = [_snapshot(db_t, c, texts) for c in embeddings.current_active_codes(db_t)]
-    by_id = {s.id: s for s in judge}
-    targets = [scope_code_id] if scope_code_id is not None else [s.id for s in judge]
-    questions = [(s.id, s.instructions) for s in judge]
-    judge_ids = [s.id for s in judge]
-    human_judged = _human_judged(db_t, sorted(set(judge_ids) | set(targets)))
+    def save(self) -> None:
+        run = self.db_t.get(SearchRun, self.run_id)
+        run.requests, run.tokens_used, run.summary = self.requests, self.tokens, self.summarize(self)
+        self.db_t.commit()
 
-    positives = {c: 0 for c in judge_ids}
-    tries = {c: 0 for c in targets}
-    missing_answers = 0
-    failed_requests = 0
-    failed_batches = 0
-    requests = 0
-    tokens = 0
-    judged: set[int] = set()
-    random_every = round(1 / cfg.random_share) if cfg.random_share > 0 else 0
+    def judge_batch(self, hids: list[int]) -> None:
+        futures = [
+            self.pool.submit(
+                self.client.judge,
+                build_request({"id": hid, "text": self.highlights[hid][0]}, self.questions, self.model),
+            )
+            for hid in hids
+        ]
+        error: JevError | None = None
+        batch_failures = 0
+        for hid, future in zip(hids, futures):
+            try:
+                response = future.result()
+            except JevError as exc:
+                if exc.status in FATAL_JEV_STATUSES:
+                    raise
+                log.warning("Run %s: Jev request for highlight %s failed: %s", self.run_id, hid, exc)
+                error = exc
+                batch_failures += 1
+                self.failed_requests += 1
+                continue
+            self.requests += 1
+            self.tokens += int((response.get("usage") or {}).get("input_tokens") or 0)
+            probabilities, missing = parse_noul(response, self.judge_ids)
+            self.missing_answers += len(missing)
+            for code_id, p in probabilities.items():
+                snap = self.by_id[code_id]
+                self.db_t.add(
+                    Coding(
+                        code_id=code_id, highlight_id=hid,
+                        conversation_id=self.highlights[hid][1],
+                        is_ai_generated=True, ai_probability=p, status="suggested",
+                        created_by=self.user_id, run_id=self.run_id,
+                        ai_metadata={
+                            "model": self.model,
+                            "run_id": self.run_id,
+                            "question_instructions_hash": snap.instructions_hash,
+                        },
+                    )
+                )
+                self.answered[code_id] += 1
+                if p >= snap.threshold and hid not in self.human_judged[code_id]:
+                    self.positives[code_id] += 1
+            self.save()
+        self.failed_batches = self.failed_batches + 1 if batch_failures == len(hids) else 0
+        if batch_failures:
+            self.save()
+        if self.failed_batches >= MAX_CONSECUTIVE_FAILED_BATCHES:
+            raise error
 
-    def summary() -> dict:
+    def finish(self) -> None:
+        run = self.db_t.get(SearchRun, self.run_id)
+        run.status = "done"
+        run.finished_at = _now()
+        self.save()
+
+
+def _counts(j: _Judging) -> dict:
+    return {"missing_answers": j.missing_answers, "failed_requests": j.failed_requests}
+
+
+def draw_sample(all_ids: list[int], size: int, rng: random.Random) -> list[int]:
+    return rng.sample(all_ids, min(size, len(all_ids)))
+
+
+def _sample(db_c: Session, db_t: Session, run_id: int, client: JevClient, rng: random.Random) -> None:
+    """Judges `search.sample_size` random highlights against every active code. Writes no
+    run_highlight rows; the run's highlights are its AI coding rows."""
+    cfg = get_config().search
+
+    def summarize(j: _Judging) -> dict:
         return {
+            "kind": SAMPLE,
             "codes": {
                 str(c): {
-                    "positives": positives[c],
-                    "tries": tries[c],
-                    "hard_to_find": positives[c] < cfg.hard_to_find_below,
+                    "positives": j.positives[c],
+                    "tries": j.answered[c],
+                    "few": j.positives[c] < cfg.hard_to_find_below,
                 }
-                for c in targets
+                for c in j.judge_ids
             },
-            "missing_answers": missing_answers,
-            "failed_requests": failed_requests,
+            **_counts(j),
         }
 
-    remaining = set(targets)
     with ThreadPoolExecutor(max_workers=max(1, cfg.jev_concurrency)) as pool:
-        while remaining:
-            code = min(remaining, key=lambda c: (positives[c], c))
-            remaining.remove(code)
-            excluded = human_judged[code] | judged
-            queue = _queue(rank(code), all_ids, excluded, random_every, rng)
-            while positives[code] < cfg.target_positives and tries[code] < cfg.max_tries_per_code:
-                size = min(cfg.jev_concurrency, cfg.max_tries_per_code - tries[code])
-                batch = [item for _, item in zip(range(size), queue)]
-                if not batch:
-                    break
-                for hid, picked_by, position in batch:
-                    tries[code] += 1
-                    judged.add(hid)
-                    db_t.add(
-                        RunHighlight(
-                            run_id=run_id, target_code_id=code, highlight_id=hid,
-                            picked_by=picked_by, position=position,
-                        )
-                    )
-                db_t.commit()
+        judging = _Judging(db_c, db_t, run_id, client, pool, [], summarize)
+        sample = draw_sample(judging.all_ids, cfg.sample_size, rng)
+        size = max(1, cfg.jev_concurrency)
+        for start in range(0, len(sample), size):
+            judging.judge_batch(sample[start : start + size])
+        judging.finish()
 
-                futures = [
-                    pool.submit(
-                        client.judge,
-                        build_request({"id": hid, "text": highlights[hid][0]}, questions, model),
-                    )
-                    for hid, _, _ in batch
-                ]
-                error: JevError | None = None
-                batch_failures = 0
-                for (hid, _, _), future in zip(batch, futures):
-                    try:
-                        response = future.result()
-                    except JevError as exc:
-                        if exc.status in FATAL_JEV_STATUSES:
-                            raise
-                        log.warning("Run %s: Jev request for highlight %s failed: %s", run_id, hid, exc)
-                        error = exc
-                        batch_failures += 1
-                        failed_requests += 1
-                        continue
-                    requests += 1
-                    tokens += int((response.get("usage") or {}).get("input_tokens") or 0)
-                    probabilities, missing = parse_noul(response, judge_ids)
-                    missing_answers += len(missing)
-                    for code_id, p in probabilities.items():
-                        snap = by_id[code_id]
-                        db_t.add(
-                            Coding(
-                                code_id=code_id, highlight_id=hid,
-                                conversation_id=highlights[hid][1],
-                                is_ai_generated=True, ai_probability=p, status="suggested",
-                                created_by=user_id, run_id=run_id,
-                                ai_metadata={
-                                    "model": model,
-                                    "run_id": run_id,
-                                    "question_instructions_hash": snap.instructions_hash,
-                                },
-                            )
-                        )
-                        if p >= snap.threshold and hid not in human_judged[code_id]:
-                            positives[code_id] += 1
-                    run = db_t.get(SearchRun, run_id)
-                    run.requests, run.tokens_used, run.summary = requests, tokens, summary()
-                    db_t.commit()
-                failed_batches = failed_batches + 1 if batch_failures == len(batch) else 0
-                if batch_failures:
-                    run = db_t.get(SearchRun, run_id)
-                    run.summary = summary()
-                    db_t.commit()
-                if failed_batches >= MAX_CONSECUTIVE_FAILED_BATCHES:
-                    raise error
 
-    run = db_t.get(SearchRun, run_id)
-    run.status = "done"
-    run.finished_at = _now()
-    run.requests, run.tokens_used, run.summary = requests, tokens, summary()
-    db_t.commit()
+def _find_more(
+    db_c: Session,
+    db_t: Session,
+    run_id: int,
+    code: int,
+    client: JevClient,
+    rng: random.Random,
+    rank: Rank,
+) -> None:
+    """Walks the code's candidates (similarity order, every `random_every`-th slot random)
+    until `target_positives` or `max_tries_per_code`."""
+    cfg = get_config().search
+    random_every = round(1 / cfg.random_share) if cfg.random_share > 0 else 0
+    tries = 0
+
+    def summarize(j: _Judging) -> dict:
+        return {
+            "kind": FIND_MORE,
+            "codes": {
+                str(code): {
+                    "positives": j.positives[code],
+                    "tries": tries,
+                    "hard_to_find": j.positives[code] < cfg.hard_to_find_below,
+                }
+            },
+            **_counts(j),
+        }
+
+    with ThreadPoolExecutor(max_workers=max(1, cfg.jev_concurrency)) as pool:
+        judging = _Judging(db_c, db_t, run_id, client, pool, [code], summarize)
+        queue = _queue(rank(code), judging.all_ids, judging.human_judged[code], random_every, rng)
+        while judging.positives[code] < cfg.target_positives and tries < cfg.max_tries_per_code:
+            size = min(cfg.jev_concurrency, cfg.max_tries_per_code - tries)
+            batch = [item for _, item in zip(range(size), queue)]
+            if not batch:
+                break
+            for hid, picked_by, position in batch:
+                tries += 1
+                db_t.add(
+                    RunHighlight(
+                        run_id=run_id, target_code_id=code, highlight_id=hid,
+                        picked_by=picked_by, position=position,
+                    )
+                )
+            db_t.commit()
+            judging.judge_batch([hid for hid, _, _ in batch])
+        judging.finish()
 
 
 _start_lock = threading.Lock()
@@ -306,32 +382,32 @@ _threads: dict[int, threading.Thread] = {}
 
 
 def _check_can_start(db_c: Session, db_t: Session, scope_code_id: int | None) -> None:
+    """A sample run (no scope code) needs only active codes; a find-more run also needs the
+    code's query embedding and every highlight embedded, because it ranks by similarity."""
     if db_t.scalars(select(SearchRun.id).where(SearchRun.status == "running")).first() is not None:
         raise RunConflict("A search run is already running.")
     active = {c.id for c in embeddings.current_active_codes(db_t)}
-    if scope_code_id is not None:
-        if db_t.get(Code, scope_code_id) is None:
-            raise ScopeCodeNotFound(f"Code {scope_code_id} does not exist.")
-        if scope_code_id not in active:
-            raise RunConflict(f"Code {scope_code_id} is not an active code of the current codebook.")
-        scope = {scope_code_id}
-    else:
-        scope = active
-    if not scope:
-        raise RunConflict("The current codebook has no active codes.")
-    stale = sorted(scope & embeddings.stale_code_ids(db_t))
-    if stale:
-        raise RunConflict(f"Codes {stale} have no current query embedding; run POST /embeddings first.")
+    if scope_code_id is None:
+        if not active:
+            raise RunConflict("The current codebook has no active codes.")
+        return
+    if db_t.get(Code, scope_code_id) is None:
+        raise ScopeCodeNotFound(f"Code {scope_code_id} does not exist.")
+    if scope_code_id not in active:
+        raise RunConflict(f"Code {scope_code_id} is not an active code of the current codebook.")
+    if scope_code_id in embeddings.stale_code_ids(db_t):
+        raise RunConflict(f"Code {scope_code_id} has no current query embedding; embed highlights and codes first.")
     est = embeddings.estimate(db_c, db_t)
     if est["highlights_embedded"] < est["highlights_total"]:
         raise RunConflict(
             f"{est['highlights_total'] - est['highlights_embedded']} highlights are not embedded; "
-            "run POST /embeddings first."
+            "embed highlights and codes first."
         )
 
 
 def start_run(scope_code_id: int | None) -> int:
-    """Creates a running SearchRun and searches on a daemon thread with its own sessions."""
+    """Creates a running SearchRun (a sample run when scope_code_id is None) and runs it on a
+    daemon thread with its own sessions."""
     with _start_lock:
         with CorticoSession() as db_c, TaggingSession() as db_t:
             _check_can_start(db_c, db_t, scope_code_id)
@@ -349,7 +425,7 @@ def _background(run_id: int) -> None:
         except Exception as exc:
             run = db_t.get(SearchRun, run_id)
             run.status, run.finished_at = "failed", _now()
-            run.summary = {"error": f"{type(exc).__name__}: {exc}"}
+            run.summary = {**(run.summary or {}), "error": f"{type(exc).__name__}: {exc}"}
             db_t.commit()
             return
         try:
