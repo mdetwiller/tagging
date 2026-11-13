@@ -61,12 +61,18 @@ def _human_examples(db_t: Session, code_id: int, texts: dict[int, str]) -> tuple
     return accepted[:MAX_HUMAN_EXAMPLES], rejected[:MAX_HUMAN_EXAMPLES]
 
 
-def _snapshot(db_t: Session, code: Code, texts: dict[int, str]) -> _CodeSnapshot:
+def code_instructions(db_t: Session, code: Code, texts: dict[int, str]) -> str:
+    """The Noul instructions Jev sees for the code now. `texts` maps highlight_id to text and
+    must cover the code's human-judged highlights."""
     exemplars = list(
         db_t.scalars(select(CodeExemplar).where(CodeExemplar.code_id == code.id).order_by(CodeExemplar.id))
     )
     accepted, rejected = _human_examples(db_t, code.id, texts)
-    instructions = build_instructions(code, exemplars, accepted, rejected)
+    return build_instructions(code, exemplars, accepted, rejected)
+
+
+def _snapshot(db_t: Session, code: Code, texts: dict[int, str]) -> _CodeSnapshot:
+    instructions = code_instructions(db_t, code, texts)
     return _CodeSnapshot(
         id=code.id,
         threshold=code.threshold,
