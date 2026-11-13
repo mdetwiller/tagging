@@ -11,35 +11,80 @@ writes goes to `db/tagging.db` (override with `TAGGING_DB_PATH`) and `data/embed
 
 ```
 cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd frontend && npm install
 ```
 
-Keys are read by variable name, never committed:
-- `TYPESAFE_API_KEY`: the environment, else `Tagging/.env` (see `.env.example`), else
+Keys are read by variable name, never committed or printed:
+- `TYPESAFE_API_KEY` (Jev): the environment, else `Tagging/.env` (see `.env.example`), else
   `../Codestormer/.env`.
-- `OPENAI_API_KEY`, `OPENAI_BASE_URL`: the environment, else `../backend/.env`.
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL` (embeddings): the environment, else `../backend/.env`
+  (Notes in the Margin's).
 
 ## Run
 
 ```
 cd backend && .venv/bin/uvicorn app.main:app --port 8010
+cd frontend && npm run dev
 ```
 
-`GET http://localhost:8010/health` returns `{"ok":true}`. Ports are fixed: backend 8010,
-frontend 5176 (CORS allows only `http://localhost:5176`). Don't use `--reload`.
+Then open http://localhost:5176. `GET http://localhost:8010/health` returns `{"ok":true}`.
+Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
+`http://localhost:5176`, and `frontend/src/lib/api.ts` hard-codes `BASE`). Don't use
+`--reload`; stop the backend by port (`lsof -ti tcp:8010 | xargs kill`).
+
+## First use
+
+1. Import Codestormer's `reconciled_codebook.json` in the setup panel. Codes with an empty
+   definition are flagged. Re-importing creates a new codebook; the older one stays active
+   and "current" is the newest by id.
+2. Embed the highlights and code queries. This is a paid OpenAI call
+   (`text-embedding-3-small`, about 1.02M tokens, about $0.02) behind an estimate and a
+   confirm step (`POST /embeddings` needs `{"confirm": true}`). Later runs of the job embed
+   only highlights without a vector and stale code queries.
+3. Start a run (all codes or one code). Renaming a code or editing its definition makes its
+   query embedding stale, and runs return 409 until you re-embed (cheap, only the stale
+   queries).
+4. Review: accept, reject, or apply codes in bulk, then export one JSON file.
+
+## Jev cost and behaviour
+
+- Each Jev request judges one highlight against every active code, so a request carries the
+  whole codebook (about 4.4k input tokens with 57 codes). `usage.input_tokens` from each
+  response is summed into the run's `tokens_used`.
+- Measured: one single-code run on the real codebook (57 codes) took 168 requests and 736,054
+  input tokens, and found 10 positives.
+- No TypeSafe price is recorded anywhere, and there is deliberately no cost warning for Jev.
+- Retries: 5 attempts in total (`jev.max_attempts`), backoff from 2 s, on 429, 500, 502,
+  503, 504 and network errors (`httpx.TransportError`).
 
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q
+cd backend && .venv/bin/python -m pytest -q        # 94 tests, about 3 s
+cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 
 Tests need no network and no keys. They read the real snapshot (read-only) and write to a
 temporary tagging database and embeddings directory that `tests/conftest.py` sets with
 `setdefault`, so never export `TAGGING_DB_PATH` or `TAGGING_EMBEDDINGS_DIR` pointing at the
-real `db/tagging.db` or `data/embeddings/`. Embedding tests use a fake client; `POST
-/embeddings` (paid OpenAI call) needs `{"confirm": true}`.
+real `db/tagging.db` or `data/embeddings/`. Jev and embedding tests use fake clients. There
+are no frontend tests.
 
 ## Recorded deviations
 
 - `coding` stores the Cortico `highlight_id` directly; `highlight_share_id` stays null (only
   163 shares exist in the snapshot).
+- Jev's Noul answer field, as found in the live probe of 2026-11-13: each question comes back
+  as `{"c<code_id>": {"type": "noul", "noul": <0..1>}}`. `parse_noul` in
+  `backend/app/services/jev.py` reads `noul` first.
+- Mark Not Done sets `highlight_status.status = "not_started"` (Cortico's
+  `bulkMarkAsNotDone` sets "Pending").
+- Re-importing a codebook leaves older codebooks `ACTIVE`; the current codebook is the newest
+  by id.
+
+## Milestone 2 hook
+
+The drift check hangs on `onSessionEnd(codeId, count)` in
+`frontend/src/components/ReviewPane.tsx`, where `count` is the number of distinct highlights
+judged for that code in the session. A session ends on "Done reviewing", or on leaving the
+code's view after at least 5 new judgments.

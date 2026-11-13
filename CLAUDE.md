@@ -1,0 +1,79 @@
+# CLAUDE.md
+
+Rules and pointers for working in this repo. Update CLAUDE.md in the same commit as any
+change to the behaviour it describes, because a stale rule here misleads every later session.
+
+## 1. What this project is
+
+The Tagging prototype is Codestormer's Phase 3, built as its own single-user, local-only app.
+It imports Codestormer's reconciled codebook, ranks Cortico highlights against each code by
+embedding similarity (OpenAI `text-embedding-3-small`), asks Jev (TypeSafe) for a Noul
+probability per code, and lets the researcher accept, reject and apply codes in bulk, with
+per-code agreement and a JSON export. The stack is FastAPI + SQLAlchemy (`backend/`) and
+React 19 + Vite + TypeScript (`frontend/`). Source data is `../acp_pipeline_snapshot.db`
+(read-only); everything the app writes goes to `db/tagging.db` and `data/embeddings/`.
+Milestone 1 is complete; milestone 2 (drift proposals) is not started.
+
+## 2. Development commands
+
+| Purpose | Command |
+|---|---|
+| Setup (backend) | `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
+| Setup (frontend) | `cd frontend && npm install` |
+| Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
+| Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
+| Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (94 tests, about 3 s) |
+| Typecheck | `cd frontend && npx tsc -b --noEmit` |
+| Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
+| Build | `cd frontend && npm run build` |
+
+- **Ports are fixed:** backend 8010, frontend 5176 (`strictPort`), because CORS allows only `http://localhost:5176` and `frontend/src/lib/api.ts` hard-codes `BASE = "http://localhost:8010"`.
+- **Never use ports 8000/5173** (Notes in the Margin) **or 5174/5175** (Codestormer), because those apps run beside this one and hold the user's data.
+- **Tests never call the network** and need no real keys. Jev and OpenAI are faked. They do read the real snapshot, read-only.
+- **The tests' databases:** `tests/conftest.py` sets `TAGGING_DB_PATH` and `TAGGING_EMBEDDINGS_DIR` to temp paths with `setdefault`. Never export either in your shell pointing at the real `db/tagging.db` or `data/embeddings/`, because tests would write into them.
+- **Gaps:** there is no backend lint or typecheck and no frontend tests.
+
+## 3. Rules
+
+| Rule | Reason |
+|---|---|
+| Never write to `../acp_pipeline_snapshot.db`. It is opened only as `sqlite:///file:<path>?mode=ro&immutable=1&uri=true` with `PRAGMA query_only = ON`; never `add()` or `commit()` through the Cortico session. | It is the source data, shared with Notes in the Margin. |
+| Snapshot path comes from `cortico_db_path` in `backend/config.yaml`; the tagging DB from `TAGGING_DB_PATH`, default `db/tagging.db`. | One place to repoint both. |
+| Rows in `coding`, `code`, `code_revision` and `highlight_status` are never deleted. Retiring, rejecting and removing are new rows or status changes. | Judgments and codebook edits must stay auditable. |
+| Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first. | The revision history goes into the export. |
+| Every AI row has `is_ai_generated=True`, `status="suggested"`, and `ai_metadata` with at least `model`, `run_id`, `question_instructions_hash`. | Only the user files judgments, and every AI row must be traceable to its run and prompt. |
+| Single user: `config.user_id = 101` is used for `created_by`. | There is no auth. |
+| Thresholds (default 0.5) and search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
+| Jev: `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, `Authorization: Bearer $TYPESAFE_API_KEY`, 5 attempts with backoff from 2 s on 429/500/502/503/504 and network errors. No cost warning. | Copied from Codestormer's `call_jev`; the user chose no warning. |
+| Jev's answer is read from `{"c<code_id>": {"type": "noul", "noul": <0..1>}}`. A missing answer is counted in `missing_answers`, never saved as a null probability. | Found in the live probe of 2026-11-13. |
+| Python modules start with `from __future__ import annotations`. | House style. |
+| A new or changed column on an existing table: stop and ask the user how to migrate. | There are no migrations; `create_all` only adds missing tables, and `db/tagging.db` holds real judgments. |
+
+## 4. Paid and external calls
+
+| Call | What it costs | Rule |
+|---|---|---|
+| `POST /embeddings` (OpenAI) | First run about 1.02M tokens, about $0.02; later runs only stale code queries and new highlights | Requires `{"confirm": true}` after the estimate from `GET /embeddings/status` (otherwise 400). Ask the user before triggering it. |
+| `POST /runs` (Jev) | One request per highlight, each asking about every active code (about 4.4k input tokens with 57 codes; a single-code run took 168 requests and 736,054 tokens). No TypeSafe price is recorded. | Ask the user before starting a live run. |
+
+- Renaming a code or editing its definition marks its query stale; runs return 409 until it is re-embedded.
+- Keys are read by name only: `TYPESAFE_API_KEY` from the environment, `Tagging/.env`, then `../Codestormer/.env`; `OPENAI_API_KEY` and `OPENAI_BASE_URL` from the environment, then `../backend/.env`. Never print or open any `.env`; check by variable name only.
+
+## 5. Codestormer import contract
+
+- Import reads Codestormer's reconciled JSON (`{version, last_saved, codes:[...]}` with `children`), never the Cortico export, because only the reconciled file carries exemplar text. A Cortico-shaped file (codes with `parent_id`) is rejected with a message.
+- Each code's exemplars come from that code's own `exemplars` list. Never read exemplars from `merged_from`; it holds whole copies of merged codes, and only their names are kept (in `x_source`).
+- Re-importing creates a new codebook. Older codebooks stay `ACTIVE`; the current one is the newest by id.
+
+## 6. Pointers
+
+| Doc | Read it when |
+|---|---|
+| `plan/design.md` | Before changing behaviour. It is the spec: every settled decision. |
+| `plan/milestone-1-plan.md` | Before structural changes. Global Constraints, Review Focus and the file map. |
+| `README.md` | Setup, first use, measured Jev cost, recorded deviations. |
+| `ai-sensemaking-prototype/` | Cortico reference code. Gitignored; never modify it. |
+
+- **Milestone 2 hook:** the drift check hangs on `onSessionEnd(codeId, count)` in `frontend/src/components/ReviewPane.tsx` (`count` = distinct highlights judged for that code in the session; fires on "Done reviewing" or on leaving after `SESSION_END_MIN_JUDGMENTS = 5`).
+- **Git:** there is no remote. Commit on a branch, never push.
