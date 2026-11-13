@@ -140,13 +140,11 @@ def test_scored_highlight_text_absent_from_both_questions(db, setup):
     judged = setup["hids"][:8]
     for body in client.bodies:
         hid = body["state"]["highlight"]["id"]
-        others_seen = False
         for key in ("cur", "new"):
             instructions = body["questions"][key]["instructions"]
             assert _first_words(texts[hid]) not in instructions
-            others_seen |= any(_first_words(texts[o]) in instructions for o in judged if o != hid)
-        # Other judged highlights still serve as examples, so the absence above is not vacuous.
-        assert others_seen
+            # Other judged highlights still serve as examples, so the absence above is not vacuous.
+            assert any(_first_words(texts[o]) in instructions for o in judged if o != hid), key
 
 
 def test_summary_matches_hand_computed_stats(db, setup):
@@ -203,6 +201,17 @@ def test_401_fails_score(db, setup):
     p = db.get(DriftProposal, setup["proposal"])
     assert p.score_status == "failed"
     assert "401" in p.score_summary["error"]
+
+
+def test_three_all_failed_batches_fail_score(db, setup):
+    with pytest.raises(JevError):
+        _run_score(db, setup, FakeJev(_score_fn(setup), fail_calls=range(1, 100)))
+    db.expire_all()
+    p = db.get(DriftProposal, setup["proposal"])
+    assert p.score_status == "failed"
+    # Concurrency 2: three batches of two, all failed.
+    assert p.score_summary["failed_requests"] == 6
+    assert "503" in p.score_summary["error"]
 
 
 def test_rescore_appends_rows_and_replaces_summary(db, setup):
@@ -296,3 +305,26 @@ def test_orphaned_running_score_marked_failed(db, setup):
     p = db.get(DriftProposal, setup["proposal"])
     assert p.score_status == "failed"
     assert "stopped" in p.score_summary["error"]
+
+
+def test_early_background_error_leaves_no_running_score(db, setup, fake_http, monkeypatch):
+    fake_http(FakeJev(_score_fn(setup)))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom before scoring")
+
+    monkeypatch.setattr(drift, "score_proposal", broken)
+    with TestClient(app) as c:
+        assert c.post(f"/proposals/{setup['proposal']}/score").status_code == 202
+        drift.join_score(setup["proposal"], timeout=30)
+        db.expire_all()
+        p = db.get(DriftProposal, setup["proposal"])
+        assert p.score_status == "failed"
+        assert "boom before scoring" in p.score_summary["error"]
+        monkeypatch.undo()
+        fake_http(FakeJev(_score_fn(setup)))
+        # Nothing is stuck: a new score can start and finish.
+        assert c.post(f"/proposals/{setup['proposal']}/score").status_code == 202
+        drift.join_score(setup["proposal"], timeout=30)
+    db.expire_all()
+    assert db.get(DriftProposal, setup["proposal"]).score_status == "done"

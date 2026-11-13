@@ -524,19 +524,29 @@ def start_score(proposal_id: int) -> None:
 
 
 def _score_background(proposal_id: int) -> None:
-    with CorticoSession() as db_c, TaggingSession() as db_t:
-        try:
+    error = "The score stopped without finishing."
+    try:
+        with CorticoSession() as db_c, TaggingSession() as db_t:
             client = HttpJevClient()
-        except Exception as exc:
-            proposal = db_t.get(DriftProposal, proposal_id)
-            proposal.score_status = "failed"
-            proposal.score_summary = {"error": f"{type(exc).__name__}: {exc}"}
-            db_t.commit()
-            return
-        try:
             score_proposal(db_c, db_t, proposal_id, client)
-        except Exception:
-            log.exception("Score of proposal %s failed", proposal_id)
+    except Exception as exc:
+        log.exception("Score of proposal %s failed", proposal_id)
+        error = f"{type(exc).__name__}: {exc}"
+    finally:
+        # A score left running would refuse every Jev job until a restart.
+        _fail_if_running(proposal_id, error)
+
+
+def _fail_if_running(proposal_id: int, error: str) -> None:
+    try:
+        with TaggingSession() as db_t:
+            proposal = db_t.get(DriftProposal, proposal_id)
+            if proposal is not None and proposal.score_status == "running":
+                proposal.score_status = "failed"
+                proposal.score_summary = {**(proposal.score_summary or {}), "error": error}
+                db_t.commit()
+    except Exception:
+        log.exception("Could not mark the score of proposal %s failed", proposal_id)
 
 
 def join_score(proposal_id: int, timeout: float | None = None) -> None:

@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is in progress on the `mi
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (166 tests, about 5 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (168 tests, about 5 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
