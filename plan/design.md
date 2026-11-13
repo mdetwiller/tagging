@@ -91,7 +91,8 @@ each code's tagging prompt improves from those judgments.
 
 One JSON file: `codebook.codes[]` (`id, name, description, parent_id, code_type`),
 `codings[]` (every human and AI judgment, with `final`), and an `x_tagging` block (each
-code's instructions, threshold, revision history and agreement).
+code's instructions, threshold, revision history and agreement, plus `family_notes`: each
+parent code's current non-empty "possibly missing codes" note).
 
 ## Milestones
 

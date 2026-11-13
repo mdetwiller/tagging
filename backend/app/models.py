@@ -114,3 +114,16 @@ class RunHighlight(Base):
     highlight_id = Column(Integer, nullable=False)
     picked_by = Column(String, nullable=False)  # similarity | random
     position = Column(Integer, nullable=False)
+
+
+class FamilyNote(Base):
+    """Append-only: the current note for a code is its row with the highest id. Rows are never
+    deleted. Only top-level codes (code families) have notes."""
+
+    __tablename__ = "family_note"
+
+    id = Column(Integer, primary_key=True)
+    code_id = Column(Integer, ForeignKey("code.id"), nullable=False, index=True)
+    text = Column(Text, nullable=False, default="")
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_now)

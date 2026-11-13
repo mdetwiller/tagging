@@ -6,6 +6,7 @@ import type {
   CodeRevision,
   EmbedResult,
   EmbeddingStatus,
+  FamilyNote,
   HighlightReviewStatus,
   HighlightStatusResult,
   ImportResult,
@@ -68,6 +69,9 @@ export const api = {
   editCode: (id: number, changes: CodeEdit) =>
     request<CodeOut>(`/codes/${id}`, { method: "PATCH", body: JSON.stringify(changes) }),
   codeRevisions: (id: number) => request<CodeRevision[]>(`/codes/${id}/revisions`),
+  familyNote: (id: number) => request<FamilyNote>(`/codes/${id}/note`),
+  saveFamilyNote: (id: number, text: string) =>
+    request<FamilyNote>(`/codes/${id}/note`, { method: "PUT", body: JSON.stringify({ text }) }),
 
   embeddingStatus: () => request<EmbeddingStatus>("/embeddings/status"),
   embed: () => request<EmbedResult>("/embeddings", { method: "POST", body: JSON.stringify({ confirm: true }) }),

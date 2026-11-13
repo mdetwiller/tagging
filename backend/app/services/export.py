@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Code, Codebook, CodeRevision, Coding
 from ..models_cortico import Highlight
+from .family_notes import current_notes
 from .judgments import agreement, latest_by_pair
 from .search_run import code_instructions
 
@@ -55,6 +56,8 @@ def build_export(db_t: Session, db_c: Session) -> dict:
         revisions[rev.code_id].append(
             {"field": rev.field, "before": rev.before, "after": rev.after, "created_at": _iso(rev.created_at)}
         )
+
+    notes = current_notes(db_t, [c.id for c in codes if c.parent_code_id is None])
 
     earlier = db_t.execute(
         select(Codebook.id, Codebook.name, func.count(Coding.id))
@@ -107,6 +110,12 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                     "agreement": agreement(db_t, c.id),
                 }
                 for c in codes
+            },
+            # Researcher notes on codes that may be missing from each family, keyed by parent code id.
+            "family_notes": {
+                str(code_id): {"name": by_id[code_id].name, "text": n.text, "updated_at": _iso(n.created_at)}
+                for code_id, n in sorted(notes.items())
+                if n.text.strip()
             },
             "deviations": list(DEVIATIONS),
             # Re-importing starts a new codebook; codings on older ones are counted, not exported.

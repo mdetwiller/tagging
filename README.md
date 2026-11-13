@@ -60,6 +60,13 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
    and Find more's random picks), and a collapsed "Below threshold" section (Find more's other similarity
    picks, including unscored ones). Each row is labelled sample, search or random.
 
+Each code family (a top-level code) has a notepad, "Possibly missing codes", for codes that
+seem to be missing from it. Open it under the parent with "Notes" in the code list (a dot
+marks a family with a note), or with "Family notes: <parent>" above a code's review; both
+edit the same note (`GET`/`PUT /codes/{id}/note`). Each changed save adds a `family_note`
+row and the newest wins, so earlier versions are kept. The export carries the current
+non-empty notes in `x_tagging.family_notes`.
+
 ## Jev cost and behaviour
 
 - Each Jev request judges one highlight against every active code, so a request carries the
@@ -79,7 +86,7 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 114 tests, about 4 s
+cd backend && .venv/bin/python -m pytest -q        # 123 tests, about 4 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

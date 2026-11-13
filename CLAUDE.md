@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (114 tests, about 4 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (123 tests, about 4 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
@@ -40,7 +40,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 |---|---|
 | Never write to `../acp_pipeline_snapshot.db`. It is opened only as `sqlite:///file:<path>?mode=ro&immutable=1&uri=true` with `PRAGMA query_only = ON`; never `add()` or `commit()` through the Cortico session. | It is the source data, shared with Notes in the Margin. |
 | Snapshot path comes from `cortico_db_path` in `backend/config.yaml`; the tagging DB from `TAGGING_DB_PATH`, default `db/tagging.db`. | One place to repoint both. |
-| Rows in `coding`, `code`, `code_revision` and `highlight_status` are never deleted. Retiring, rejecting and removing are new rows or status changes. | Judgments and codebook edits must stay auditable. |
+| Rows in `coding`, `code`, `code_revision`, `highlight_status` and `family_note` are never deleted. Retiring, rejecting and removing are new rows or status changes; a family note's current text is its newest row. | Judgments and codebook edits must stay auditable. |
 | Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first. | The revision history goes into the export. |
 | Every AI row has `is_ai_generated=True`, `status="suggested"`, and `ai_metadata` with at least `model`, `run_id`, `question_instructions_hash`. | Only the user files judgments, and every AI row must be traceable to its run and prompt. |
 | Single user: `config.user_id = 101` is used for `created_by`. | There is no auth. |

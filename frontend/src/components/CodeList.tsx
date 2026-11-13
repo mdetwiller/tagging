@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errorDetail } from "../lib/api";
 import type { Agreement, Codebook, CodeEdit, CodeOut, RunCodeProgress, RunOverview, RunStatus } from "../lib/types";
+import FamilyNote from "./FamilyNote";
 
 interface Props {
   codebook: Codebook;
@@ -13,6 +14,9 @@ interface Props {
   onEdited: () => Promise<void>;
   /** Bumped when a run finishes, so agreement is refetched. */
   agreementKey: number;
+  /** Notes saved this page load, by parent code id: true when not empty. Overrides `has_note`. */
+  noteFlags: Record<number, boolean>;
+  onNoteSaved: (codeId: number, text: string) => void;
 }
 
 function allCodes(codes: CodeOut[]): CodeOut[] {
@@ -31,9 +35,20 @@ interface CodeProgress {
   findMore: RunCodeProgress | undefined;
 }
 
-export default function CodeList({ codebook, run, overview, selectedCodeId, onSelect, onEdited, agreementKey }: Props) {
+export default function CodeList({
+  codebook,
+  run,
+  overview,
+  selectedCodeId,
+  onSelect,
+  onEdited,
+  agreementKey,
+  noteFlags,
+  onNoteSaved,
+}: Props) {
   const [agreements, setAgreements] = useState<Record<number, Agreement>>({});
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [notesOpen, setNotesOpen] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +77,15 @@ export default function CodeList({ codebook, run, overview, selectedCodeId, onSe
     };
   }
   const parents = codebook.codes;
+
+  function toggleNotes(id: number) {
+    setNotesOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function toggle(id: number) {
     setCollapsed((prev) => {
@@ -98,6 +122,21 @@ export default function CodeList({ codebook, run, overview, selectedCodeId, onSe
                 {parent.children.length === 0 ? "·" : collapsed.has(parent.id) ? "▸" : "▾"}
               </button>
               <CodeRow {...rowProps(parent)} />
+            </div>
+            <div className="family-note-toggle">
+              <button
+                onClick={() => toggleNotes(parent.id)}
+                aria-expanded={notesOpen.has(parent.id)}
+                title="Codes that may be missing from this family"
+              >
+                {notesOpen.has(parent.id) ? "▾" : "▸"} Notes
+                {(noteFlags[parent.id] ?? parent.has_note) && (
+                  <span className="note-dot" aria-label="Has a note" />
+                )}
+              </button>
+              {notesOpen.has(parent.id) && (
+                <FamilyNote codeId={parent.id} onSaved={(note) => onNoteSaved(note.code_id, note.text)} />
+              )}
             </div>
             {!collapsed.has(parent.id) && parent.children.length > 0 && (
               <ul className="children">

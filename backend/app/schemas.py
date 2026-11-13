@@ -40,3 +40,9 @@ class JudgmentRequest(BaseModel):
 class HighlightStatusRequest(BaseModel):
     highlight_ids: list[int] = Field(min_length=1)
     status: Literal["not_started", "in_progress", "completed"]
+
+
+class FamilyNoteRequest(BaseModel):
+    """The whole note; it replaces the current one (earlier versions are kept)."""
+
+    text: str = Field(max_length=20000)

@@ -34,6 +34,11 @@ export default function App() {
   const [overview, setOverview] = useState<RunOverview | null>(null);
   const [judgmentsChanged, setJudgmentsChanged] = useState(0);
   const onJudgmentsChanged = useCallback(() => setJudgmentsChanged((n) => n + 1), []);
+  const [noteFlags, setNoteFlags] = useState<Record<number, boolean>>({});
+  const onNoteSaved = useCallback(
+    (codeId: number, text: string) => setNoteFlags((prev) => ({ ...prev, [codeId]: text.trim() !== "" })),
+    []
+  );
 
   const refreshCodebook = useCallback(async () => {
     try {
@@ -117,6 +122,8 @@ export default function App() {
             onSelect={setSelectedCodeId}
             onEdited={refreshAll}
             agreementKey={runsFinished + judgmentsChanged}
+            noteFlags={noteFlags}
+            onNoteSaved={onNoteSaved}
           />
         )}
       </aside>
@@ -132,6 +139,7 @@ export default function App() {
             onFindMore={startRun}
             onChanged={onJudgmentsChanged}
             onSessionEnd={handleReviewSessionEnd}
+            onNoteSaved={onNoteSaved}
           />
         ) : (
           <p className="placeholder">Select a code</p>

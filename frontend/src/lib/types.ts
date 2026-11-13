@@ -12,7 +12,17 @@ export interface CodeOut {
   threshold: number;
   display_order: number;
   exemplar_count: number;
+  /** True for a top-level code whose current family note is not empty; always false for children. */
+  has_note: boolean;
   children: CodeOut[];
+}
+
+/** GET and PUT /codes/{id}/note. Only top-level codes have notes. */
+export interface FamilyNote {
+  code_id: number;
+  text: string;
+  /** When the current note was saved; null when the family has no note yet. */
+  updated_at: string | null;
 }
 
 export interface Codebook {

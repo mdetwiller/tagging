@@ -132,7 +132,7 @@ def test_reimport_creates_new_codebook():
     tech = body["codes"][0]
     assert set(tech) == {
         "id", "name", "definition", "parent_code_id", "status", "threshold",
-        "display_order", "exemplar_count", "children",
+        "display_order", "exemplar_count", "has_note", "children",
     }
     assert body["human_judgments"] == 0
     assert [c["name"] for c in tech["children"]] == ["Digital Disconnection", "Data Centers in Community"]

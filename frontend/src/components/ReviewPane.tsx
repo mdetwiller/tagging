@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorDetail } from "../lib/api";
 import type { Codebook, CodeOut, ReviewData, Row, RowSource, RunStatus } from "../lib/types";
 import BulkBar from "./BulkBar";
+import FamilyNote from "./FamilyNote";
 
 /** Leaving a code's view with at least this many new judgments ends the review session. */
 export const SESSION_END_MIN_JUDGMENTS = 5;
@@ -21,6 +22,7 @@ interface Props {
   onChanged: () => void;
   /** Ends a review session: "Done reviewing", or leaving the code after enough new judgments. */
   onSessionEnd: (codeId: number, judgments: number) => void;
+  onNoteSaved: (codeId: number, text: string) => void;
 }
 
 export interface Judged {
@@ -51,6 +53,7 @@ export default function ReviewPane({
   onFindMore,
   onChanged,
   onSessionEnd,
+  onNoteSaved,
 }: Props) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +63,7 @@ export default function ReviewPane({
   // Distinct highlights judged for this code (not other codes) since it was opened.
   const [sessionJudged, setSessionJudged] = useState<Set<number>>(new Set());
   const sessionCount = sessionJudged.size;
+  const [noteOpen, setNoteOpen] = useState(false);
 
   // App remounts this component per code (key={codeId}), so unmounting means leaving the code.
   const sessionRef = useRef({ codeId, count: 0, onSessionEnd });
@@ -166,6 +170,7 @@ export default function ReviewPane({
   const findMoreCount = data.find_more_run_ids.length;
   const otherCodes = activeCodes.filter((c) => c.id !== codeId);
   const rowProps = { codeId, otherCodes, selected, onToggle: toggle, onJudged: afterChange };
+  const family = codebook.codes.find((p) => p.id === codeId || p.children.some((c) => c.id === codeId));
 
   return (
     <div className="review">
@@ -210,6 +215,18 @@ export default function ReviewPane({
         </div>
       </header>
       {error && <p className="error">{error}</p>}
+      {family && (
+        <details
+          className="family-note-panel"
+          open={noteOpen}
+          onToggle={(e) => setNoteOpen(e.currentTarget.open)}
+        >
+          <summary>Family notes: {family.name}</summary>
+          {noteOpen && (
+            <FamilyNote codeId={family.id} onSaved={(note) => onNoteSaved(note.code_id, note.text)} />
+          )}
+        </details>
+      )}
       {selected.size > 0 && (
         <BulkBar
           codeId={codeId}
