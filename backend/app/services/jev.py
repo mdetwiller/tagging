@@ -108,7 +108,7 @@ class HttpJevClient:
         self,
         api_key: str | None = None,
         url: str | None = None,
-        max_retries: int | None = None,
+        max_attempts: int | None = None,
         backoff_start_seconds: float | None = None,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
@@ -119,7 +119,7 @@ class HttpJevClient:
         if not self._api_key:
             raise JevError("TYPESAFE_API_KEY is not set in the environment, Tagging/.env or Codestormer/.env.")
         self._url = url or config.jev.url
-        self._max_retries = max_retries if max_retries is not None else config.jev.max_retries
+        self._max_attempts = max_attempts if max_attempts is not None else config.jev.max_attempts
         self._backoff = (
             backoff_start_seconds if backoff_start_seconds is not None else config.jev.backoff_start_seconds
         )
@@ -128,16 +128,21 @@ class HttpJevClient:
 
     def judge(self, body: dict) -> dict:
         delay = self._backoff
-        for attempt in range(self._max_retries):
-            resp = self._http.post(self._url, json=body, headers={"Authorization": f"Bearer {self._api_key}"})
-            if resp.status_code == 200:
-                return resp.json()
-            if resp.status_code in RETRY_STATUSES and attempt < self._max_retries - 1:
-                self._sleep(delay)
-                delay *= 2
-                continue
-            raise JevError(f"Jev returned {resp.status_code}: {resp.text[:300]}")
-        raise JevError("Jev was not called: max_retries is below 1.")
+        for attempt in range(self._max_attempts):
+            last = attempt == self._max_attempts - 1
+            try:
+                resp = self._http.post(self._url, json=body, headers={"Authorization": f"Bearer {self._api_key}"})
+            except httpx.TransportError as exc:
+                if last:
+                    raise JevError(f"Jev request failed: {type(exc).__name__}: {exc}") from exc
+            else:
+                if resp.status_code == 200:
+                    return resp.json()
+                if resp.status_code not in RETRY_STATUSES or last:
+                    raise JevError(f"Jev returned {resp.status_code}: {resp.text[:300]}")
+            self._sleep(delay)
+            delay *= 2
+        raise JevError("Jev was not called: max_attempts is below 1.")
 
 
 def _probe() -> None:

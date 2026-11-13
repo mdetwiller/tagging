@@ -93,7 +93,7 @@ def test_parse_noul_live_fixture():
     assert response["usage"]["input_tokens"] == 422
 
 
-def _client(statuses: list[int], sleeps: list[float], max_retries: int = 5) -> tuple[jev.HttpJevClient, list]:
+def _client(statuses: list[int], sleeps: list[float], max_attempts: int = 5) -> tuple[jev.HttpJevClient, list]:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -106,7 +106,7 @@ def _client(statuses: list[int], sleeps: list[float], max_retries: int = 5) -> t
     client = jev.HttpJevClient(
         api_key="test-key",
         url="https://jev.test/v1/systemone",
-        max_retries=max_retries,
+        max_attempts=max_attempts,
         backoff_start_seconds=2.0,
         transport=httpx.MockTransport(handler),
         sleep=sleeps.append,
@@ -124,9 +124,9 @@ def test_http_client_retries_then_succeeds():
     assert seen[0].headers["Authorization"] == "Bearer test-key"
 
 
-def test_http_client_gives_up_after_max_retries():
+def test_http_client_gives_up_after_max_attempts():
     sleeps: list[float] = []
-    client, seen = _client([500], sleeps, max_retries=3)
+    client, seen = _client([500], sleeps, max_attempts=3)
     with pytest.raises(jev.JevError, match="500"):
         client.judge({"model": "m"})
     assert len(seen) == 3
@@ -140,3 +140,41 @@ def test_http_client_does_not_retry_client_errors():
         client.judge({"model": "m"})
     assert len(seen) == 1
     assert sleeps == []
+
+
+def _timeout_client(outcomes: list[str], sleeps: list[float], max_attempts: int = 5) -> tuple[jev.HttpJevClient, list]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if outcomes[min(len(seen) - 1, len(outcomes) - 1)] == "timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(200, json={"answers": {"c7": {"noul": 0.4}}, "usage": {"input_tokens": 3}})
+
+    client = jev.HttpJevClient(
+        api_key="test-key",
+        url="https://jev.test/v1/systemone",
+        max_attempts=max_attempts,
+        backoff_start_seconds=2.0,
+        transport=httpx.MockTransport(handler),
+        sleep=sleeps.append,
+    )
+    return client, seen
+
+
+def test_http_client_retries_network_errors_then_succeeds():
+    sleeps: list[float] = []
+    client, seen = _timeout_client(["timeout", "timeout", "ok"], sleeps)
+    result = client.judge({"model": "m"})
+    assert result["answers"]["c7"]["noul"] == 0.4
+    assert len(seen) == 3
+    assert sleeps == [2.0, 4.0]
+
+
+def test_http_client_wraps_network_errors_after_max_attempts():
+    sleeps: list[float] = []
+    client, seen = _timeout_client(["timeout"], sleeps, max_attempts=3)
+    with pytest.raises(jev.JevError, match="ReadTimeout"):
+        client.judge({"model": "m"})
+    assert len(seen) == 3
+    assert sleeps == [2.0, 4.0]

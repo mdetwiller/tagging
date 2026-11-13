@@ -48,7 +48,7 @@ class SearchConfig(BaseModel):
 class JevConfig(BaseModel):
     url: str
     model: str
-    max_retries: int
+    max_attempts: int
     backoff_start_seconds: float
     state_note: str
 

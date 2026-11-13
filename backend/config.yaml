@@ -13,7 +13,7 @@ search:
 jev:
   url: https://api.typesafe.ai/v1/systemone
   model: jev-latest
-  max_retries: 5
+  max_attempts: 5
   backoff_start_seconds: 2
   state_note: "A highlight from a recorded small-group community conversation (the American Conversation Project)."
 
