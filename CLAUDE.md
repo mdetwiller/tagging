@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is in progress on the `mi
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (134 tests, about 4 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (149 tests, about 5 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
@@ -56,6 +56,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is in progress on the `mi
 |---|---|---|
 | `POST /embeddings` (OpenAI) | First run about 1.02M tokens, about $0.02; later runs only stale code queries and new highlights | Requires `{"confirm": true}` after the estimate from `GET /embeddings/status` (otherwise 400). Ask the user before triggering it. |
 | `POST /runs` (Jev) | One request per highlight, each asking about every active code (about 4.4k input tokens with 57 codes). With no `code_id` it is a sample run: `search.sample_size` (200) random highlights, about 0.9M input tokens. With `code_id` it is a find-more run for that code: up to 200 requests (one took 168 requests and 736,054 tokens). No TypeSafe price is recorded. | Ask the user before starting a live run. |
+| `POST /codes/{id}/drift` (OpenAI) | One `drift.model` call per proposal, drafted only when the code has a disagreement and no open `suggested` proposal. Refused with 409 when today's (local day) proposal tokens plus the estimate (prompt chars / 4 + 1,000) exceed `drift.daily_token_cap`. | Ask the user before triggering a live draft. Tests use a fake client; never construct `OpenAIDriftClient` in a test. |
 
 - Renaming a code or editing its definition marks its query stale; a find-more run for it returns 409 until it is re-embedded. A sample run needs no embeddings.
 - A run's kind is `summary["kind"]` (`"sample"` or `"find_more"`), written when the row is created; a sample run is one whose kind is `"sample"` (it has no scope code). Older all-codes runs (no scope code, no kind) are not samples; their `run_highlight` rows count as find-more rows. A code's current sample is the newest sample run that is not running and has at least one answered highlight for that code; the review and the code list both use it, and a running sample shows only in the run status. (`judgments.current_samples`). Sample runs write no `run_highlight` rows: their highlights are the AI `coding` rows with that `run_id`. Both kinds share `_Judging` in `services/search_run.py`; keep the request, failure and write rules there.

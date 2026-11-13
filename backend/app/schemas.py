@@ -50,3 +50,10 @@ class FamilyNoteRequest(BaseModel):
 
     text: str = Field(max_length=20000)
     base_updated_at: str | None = None
+
+
+class DriftRequest(BaseModel):
+    """`session_judgments` is how many highlights the researcher judged for the code in the
+    review session that just ended; it is stored on the proposal."""
+
+    session_judgments: int = Field(ge=0)
