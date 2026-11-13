@@ -1,0 +1,7 @@
+{
+  "answers": {
+    "c1": {"type": "noul", "noul": 0.03},
+    "c2": {"type": "noul", "noul": 0.01}
+  },
+  "usage": {"input_tokens": 422, "output_tokens": 38}
+}
