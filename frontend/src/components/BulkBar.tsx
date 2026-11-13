@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { api, errorDetail } from "../lib/api";
 import type { CodeOut, HighlightReviewStatus } from "../lib/types";
+import type { Judged } from "./ReviewPane";
 
 interface Props {
   codeId: number;
   selectedIds: number[];
   activeCodes: CodeOut[];
-  /** Called with the number of highlights judged (0 for status changes) after an action succeeds. */
-  onDone: (judged: number) => Promise<void>;
+  /** Called after an action succeeds with the judgment written, or null for a status change. */
+  onDone: (judged: Judged | null) => Promise<void>;
   onClear: () => void;
 }
 
@@ -17,12 +18,12 @@ export default function BulkBar({ codeId, selectedIds, activeCodes, onDone, onCl
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(action: () => Promise<unknown>, judged: boolean) {
+  async function run(action: () => Promise<unknown>, judged: Judged | null) {
     setBusy(true);
     setError(null);
     try {
       await action();
-      await onDone(judged ? selectedIds.length : 0);
+      await onDone(judged);
     } catch (err) {
       setError(errorDetail(err));
     } finally {
@@ -31,9 +32,12 @@ export default function BulkBar({ codeId, selectedIds, activeCodes, onDone, onCl
   }
 
   const judge = (targetCodeId: number, applied: boolean) =>
-    run(() => api.judge({ code_id: targetCodeId, highlight_ids: selectedIds, applied }), true);
+    run(() => api.judge({ code_id: targetCodeId, highlight_ids: selectedIds, applied }), {
+      codeId: targetCodeId,
+      highlightIds: selectedIds,
+    });
   const setStatus = (status: HighlightReviewStatus) =>
-    run(() => api.setHighlightStatus(selectedIds, status), false);
+    run(() => api.setHighlightStatus(selectedIds, status), null);
 
   return (
     <div className="bulk-bar">

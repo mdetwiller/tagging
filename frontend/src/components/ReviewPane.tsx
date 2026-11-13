@@ -19,6 +19,11 @@ interface Props {
   onSessionEnd: (codeId: number, judgments: number) => void;
 }
 
+export interface Judged {
+  codeId: number;
+  highlightIds: number[];
+}
+
 function formatPercent(p: number | null): string {
   return p === null ? "—" : `${Math.round(p * 100)}%`;
 }
@@ -31,7 +36,9 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [sessionCount, setSessionCount] = useState(0);
+  // Distinct highlights judged for this code (not other codes) since it was opened.
+  const [sessionJudged, setSessionJudged] = useState<Set<number>>(new Set());
+  const sessionCount = sessionJudged.size;
 
   // App remounts this component per code (key={codeId}), so unmounting means leaving the code.
   const sessionRef = useRef({ codeId, count: 0, onSessionEnd });
@@ -46,50 +53,55 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
     };
   }, []);
 
-  const load = useCallback(async () => {
-    try {
-      setData(await api.review(codeId));
-      setError(null);
-    } catch (err) {
-      setError(errorDetail(err));
-    }
+  // Only the newest review request may set data, so a slow older response can't overwrite it.
+  const requestRef = useRef(0);
+  const fetchReview = useCallback(() => {
+    const request = ++requestRef.current;
+    return api.review(codeId).then(
+      (d) => {
+        if (request !== requestRef.current) return;
+        setData(d);
+        setError(null);
+        const shown = new Set([...d.found, ...d.random].map((r) => r.highlight_id));
+        setSelected((prev) => {
+          const kept = [...prev].filter((id) => shown.has(id));
+          return kept.length === prev.size ? prev : new Set(kept);
+        });
+      },
+      (err) => {
+        if (request === requestRef.current) setError(errorDetail(err));
+      }
+    );
   }, [codeId]);
 
   useEffect(() => {
-    let cancelled = false;
-    api.review(codeId).then(
-      (d) => {
-        if (!cancelled) {
-          setData(d);
-          setError(null);
-        }
-      },
-      (err) => {
-        if (!cancelled) setError(errorDetail(err));
-      }
-    );
+    const requests = requestRef;
+    fetchReview();
     return () => {
-      cancelled = true;
+      requests.current++;
     };
-  }, [codeId, codebook, refreshKey]);
+  }, [fetchReview, codebook, refreshKey]);
 
+  /** `judged` is the code and highlights of a judgment just written, or null for a status change. */
   const afterChange = useCallback(
-    async (judged: number) => {
-      if (judged > 0) setSessionCount((n) => n + judged);
-      await load();
+    async (judged: Judged | null) => {
+      if (judged && judged.codeId === codeId) {
+        setSessionJudged((prev) => new Set([...prev, ...judged.highlightIds]));
+      }
+      await fetchReview();
       onChanged();
     },
-    [load, onChanged]
+    [codeId, fetchReview, onChanged]
   );
 
-  async function afterBulk(judged: number) {
+  async function afterBulk(judged: Judged | null) {
     await afterChange(judged);
     setSelected(new Set());
   }
 
   function endSession() {
     onSessionEnd(codeId, sessionCount);
-    setSessionCount(0);
+    setSessionJudged(new Set());
   }
 
   function toggle(id: number) {
@@ -165,7 +177,7 @@ interface RowListProps {
   selected: Set<number>;
   onToggle: (id: number) => void;
   onToggleAll: (rows: Row[], on: boolean) => void;
-  onJudged: (judged: number) => Promise<void>;
+  onJudged: (judged: Judged) => Promise<void>;
 }
 
 function RowList({ title, rows, empty, onToggleAll, ...rowProps }: RowListProps) {
@@ -192,7 +204,7 @@ interface HighlightRowProps {
   otherCodes: CodeOut[];
   selected: Set<number>;
   onToggle: (id: number) => void;
-  onJudged: (judged: number) => Promise<void>;
+  onJudged: (judged: Judged) => Promise<void>;
 }
 
 function HighlightRow({ row, codeId, otherCodes, selected, onToggle, onJudged }: HighlightRowProps) {
@@ -207,7 +219,7 @@ function HighlightRow({ row, codeId, otherCodes, selected, onToggle, onJudged }:
     try {
       await api.judge({ code_id: targetCodeId, highlight_ids: [row.highlight_id], applied });
       setPicking(false);
-      await onJudged(1);
+      await onJudged({ codeId: targetCodeId, highlightIds: [row.highlight_id] });
     } catch (err) {
       setError(errorDetail(err));
     } finally {
