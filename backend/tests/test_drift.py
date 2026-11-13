@@ -189,6 +189,34 @@ def test_validation_keeps_valid_fields_and_caps_rules(db, codes, highlights):
     }
 
 
+@pytest.mark.parametrize("empty", [[], ["", " "]])
+def test_empty_rules_list_means_no_change(db, codes, highlights, empty):
+    a = codes["A"]
+    rules.set_rules(db, a, ["Keep me"], [], "user")
+    _disagree(db, a, highlights)
+    fake = FakeDriftClient(
+        {"name": None, "definition": None, "threshold": None, "include": empty, "exclude": [], "rationale": "r"}
+    )
+    p = drift.draft(db, a, 5, fake)
+    assert p.status == "no_change"
+    assert p.proposed == {}
+    assert "empty list leaves" in fake.calls[0][0]
+
+
+def test_unparseable_response_records_its_tokens(db, codes, highlights):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    now = datetime(2031, 5, 20, 15, 0).astimezone()
+    error = drift.DriftCallError("bad JSON", input_tokens=900, output_tokens=40)
+    with pytest.raises(drift.DraftFailed) as info:
+        drift.draft(db, a, 5, FakeDriftClient(error=error), now=now)
+    p = info.value.proposal
+    assert p.status == "failed"
+    assert p.tokens == 940
+    assert (p.ai_metadata["input_tokens"], p.ai_metadata["output_tokens"]) == (900, 40)
+    assert drift.today_tokens(db, now) == 940
+
+
 def test_client_failure_saves_failed_row(db, codes, highlights):
     a = codes["A"]
     _disagree(db, a, highlights)

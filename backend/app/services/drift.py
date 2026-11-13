@@ -40,6 +40,14 @@ class TokenCapReached(RuntimeError):
     pass
 
 
+class DriftCallError(RuntimeError):
+    """A call that failed after the model had used tokens (for example, unparseable output)."""
+
+    def __init__(self, message: str, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        super().__init__(message)
+        self.input_tokens, self.output_tokens = input_tokens, output_tokens
+
+
 class DraftFailed(RuntimeError):
     def __init__(self, proposal: DriftProposal, message: str) -> None:
         super().__init__(message)
@@ -73,8 +81,14 @@ class OpenAIDriftClient:
             input=prompt,
             text={"format": {"type": "json_schema", "name": "drift_proposal", "schema": schema, "strict": True}},
         )
-        usage = response.usage
-        return json.loads(response.output_text), usage.input_tokens, usage.output_tokens
+        usage = getattr(response, "usage", None)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        try:
+            output = json.loads(response.output_text)
+        except (TypeError, ValueError) as exc:
+            raise DriftCallError(f"Unparseable model output: {exc}", input_tokens, output_tokens) from exc
+        return output, input_tokens, output_tokens
 
 
 def estimate_tokens(prompt: str) -> int:
@@ -116,13 +130,17 @@ def _judged_examples(db: Session, code: Code, disagreeing: list[int]) -> list[tu
     """(highlight_id, human verdict, AI probability) for human-judged highlights, disagreements
     first, then the newest other judgments, at most max_judged_examples."""
     latest = {hid: l for (_, hid), l in judgments.latest_by_pair(db, [code.id]).items() if l.human is not None}
-    others = sorted((h for h in latest if h not in set(disagreeing)), key=lambda h: -latest[h].human_id)
+    disagreeing_set = set(disagreeing)
+    others = sorted((h for h in latest if h not in disagreeing_set), key=lambda h: -latest[h].human_id)
     ordered = [h for h in disagreeing if h in latest] + others
     limit = get_config().drift.max_judged_examples
     return [(h, latest[h].human, latest[h].ai_probability) for h in ordered[:limit]]
 
 
-def build_prompt(db: Session, code: Code, db_c: Session | None = None) -> str:
+def build_prompt(
+    db: Session, code: Code, db_c: Session | None = None, disagreeing: list[int] | None = None
+) -> str:
+    """`disagreeing` is the code's disagreements() when the caller already has them."""
     include, exclude = rules.current_rules(db, code.id)
     parent = db.get(Code, code.parent_code_id) if code.parent_code_id else None
     siblings = list(
@@ -137,7 +155,8 @@ def build_prompt(db: Session, code: Code, db_c: Session | None = None) -> str:
             .order_by(Code.display_order, Code.id)
         )
     )
-    disagreeing = judgments.disagreements(db, code.id)
+    if disagreeing is None:
+        disagreeing = judgments.disagreements(db, code.id)
     examples = _judged_examples(db, code, disagreeing)
 
     def load_texts(s: Session) -> dict[int, str]:
@@ -162,7 +181,7 @@ def build_prompt(db: Session, code: Code, db_c: Session | None = None) -> str:
         "",
         "Rules describe what the code includes or excludes in general terms, not specific highlights;",
         "never quote or point to a highlight in a rule. Return include and exclude as the full new lists,",
-        f"at most {MAX_RULES} each; repeat a current list unchanged to keep it. Return null for name,",
+        f"at most {MAX_RULES} each; an empty list leaves that list's rules unchanged. Return null for name,",
         "definition or threshold to leave it unchanged. The threshold is the probability (0 to 1) at or",
         "above which the tagger's call counts as yes. Explain your reasoning briefly in rationale.",
         "",
@@ -229,7 +248,7 @@ def _validate(db: Session, code: Code, base: dict, output: dict) -> dict:
 
     for field in ("include", "exclude"):
         cleaned = _clean_rules(output.get(field))
-        if cleaned is not None and cleaned != base[field]:
+        if cleaned and cleaned != base[field]:
             proposed[field] = cleaned
     return proposed
 
@@ -263,7 +282,7 @@ def draft(
         return None
 
     config = get_config().drift
-    prompt = build_prompt(db, code)
+    prompt = build_prompt(db, code, disagreeing=disagreeing)
     if today_tokens(db, now) + estimate_tokens(prompt) > config.daily_token_cap:
         raise TokenCapReached("Daily drift token limit reached")
 
@@ -279,8 +298,12 @@ def draft(
     except Exception as exc:  # noqa: BLE001  any client failure is recorded, then reported as 502
         proposal.status = "failed"
         proposal.proposed = {}
-        proposal.tokens = 0
-        proposal.ai_metadata = {**metadata, "input_tokens": 0, "output_tokens": 0, "error": f"{type(exc).__name__}: {exc}"}
+        used_in = int(getattr(exc, "input_tokens", 0) or 0)
+        used_out = int(getattr(exc, "output_tokens", 0) or 0)
+        proposal.tokens = used_in + used_out
+        proposal.ai_metadata = {
+            **metadata, "input_tokens": used_in, "output_tokens": used_out, "error": f"{type(exc).__name__}: {exc}",
+        }
         db.add(proposal)
         db.commit()
         db.refresh(proposal)
