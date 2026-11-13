@@ -78,15 +78,22 @@ def question_key(code_id: int) -> str:
 
 def build_request(highlight: dict, codes: Sequence[tuple[int, str]], model: str) -> dict:
     """One Noul question per (code_id, instructions) pair, all against one highlight."""
+    return build_keyed_request(
+        highlight, [(question_key(code_id), instructions) for code_id, instructions in codes], model
+    )
+
+
+def build_keyed_request(highlight: dict, questions: Sequence[tuple[str, str]], model: str) -> dict:
+    """One Noul question per (key, instructions) pair, all against one highlight."""
     state = {
         "about": get_config().jev.state_note,
         "highlight": {"id": highlight["id"], "text": highlight["text"]},
     }
-    questions = {
-        question_key(code_id): {"type": "noul", "instructions": instructions}
-        for code_id, instructions in codes
+    return {
+        "model": model,
+        "state": state,
+        "questions": {key: {"type": "noul", "instructions": instructions} for key, instructions in questions},
     }
-    return {"model": model, "state": state, "questions": questions}
 
 
 def _probability(answer: object) -> float | None:
@@ -105,15 +112,22 @@ def _probability(answer: object) -> float | None:
 
 def parse_noul(response: dict, code_ids: Sequence[int]) -> tuple[dict[int, float], list[int]]:
     """Probabilities by code id, plus ids with no usable answer (absent or out of range)."""
+    by_key, missing = parse_keyed_noul(response, [question_key(c) for c in code_ids])
+    probabilities = {code_id: by_key[question_key(code_id)] for code_id in code_ids if question_key(code_id) in by_key}
+    return probabilities, [code_id for code_id in code_ids if question_key(code_id) in missing]
+
+
+def parse_keyed_noul(response: dict, keys: Sequence[str]) -> tuple[dict[str, float], list[str]]:
+    """Probabilities by question key, plus keys with no usable answer (absent or out of range)."""
     answers = response.get("answers") or {}
-    probabilities: dict[int, float] = {}
-    missing: list[int] = []
-    for code_id in code_ids:
-        p = _probability(answers.get(question_key(code_id)))
+    probabilities: dict[str, float] = {}
+    missing: list[str] = []
+    for key in keys:
+        p = _probability(answers.get(key))
         if p is None:
-            missing.append(code_id)
+            missing.append(key)
         else:
-            probabilities[code_id] = p
+            probabilities[key] = p
     return probabilities, missing
 
 

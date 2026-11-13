@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Protocol
 
@@ -8,11 +11,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_config
-from ..db import CorticoSession
-from ..models import Code, DriftProposal
+from ..db import CorticoSession, TaggingSession
+from ..models import Code, DriftProposal, ProposalScore
 from ..models_cortico import Highlight
-from . import judgments, rules
+from . import judgments, rules, search_run
 from .codebook_edit import CodeNotFound
+from .jev import HttpJevClient, JevClient, JevError, build_keyed_request, parse_keyed_noul
+
+log = logging.getLogger(__name__)
 
 MAX_RULES = 8
 ESTIMATED_OUTPUT_TOKENS = 1000
@@ -353,3 +359,198 @@ def proposals_for(db: Session, code_id: int) -> list[DriftProposal]:
     return list(
         db.scalars(select(DriftProposal).where(DriftProposal.code_id == code_id).order_by(DriftProposal.id.desc()))
     )
+
+
+# "Test with Jev": re-score a proposal against the code's human-judged highlights.
+
+CUR, NEW = "cur", "new"
+_score_threads: dict[int, threading.Thread] = {}
+
+
+class ProposalNotFound(LookupError):
+    pass
+
+
+class ScoreConflict(RuntimeError):
+    pass
+
+
+def get_proposal(db: Session, proposal_id: int) -> DriftProposal:
+    proposal = db.get(DriftProposal, proposal_id)
+    if proposal is None:
+        raise ProposalNotFound(f"Proposal {proposal_id} does not exist.")
+    return proposal
+
+
+def _judged(db: Session, code_id: int) -> dict[int, str]:
+    """highlight_id -> latest human verdict, for highlights whose latest human row for the code
+    is applied or not_applied."""
+    return {
+        hid: latest.human
+        for (_, hid), latest in judgments.latest_by_pair(db, [code_id]).items()
+        if latest.human in ("applied", "not_applied")
+    }
+
+
+class _Scoring:
+    """Running totals of one score run; the summary is built only from this run's answers."""
+
+    def __init__(self, current_threshold: float, proposed_threshold: float) -> None:
+        self.current_threshold, self.proposed_threshold = current_threshold, proposed_threshold
+        self.before: list[tuple[bool, bool]] = []
+        self.after: list[tuple[bool, bool]] = []
+        self.missing_answers = 0
+        self.failed_requests = 0
+
+    def add(self, human: str, current_p: float | None, proposed_p: float | None) -> None:
+        yes = human == "applied"
+        if current_p is not None:
+            self.before.append((yes, current_p >= self.current_threshold))
+        if proposed_p is not None:
+            self.after.append((yes, proposed_p >= self.proposed_threshold))
+
+    def summary(self) -> dict:
+        return {
+            "before": judgments.agreement_stats(self.before),
+            "after": judgments.agreement_stats(self.after),
+            "missing_answers": self.missing_answers,
+            "failed_requests": self.failed_requests,
+        }
+
+
+def score_proposal(db_c: Session, db_t: Session, proposal_id: int, client: JevClient) -> None:
+    """Asks Jev, for each highlight judged by a human for the proposal's code, the current
+    question (`cur`) and the proposed one (`new`), with the highlight left out of both
+    questions' examples. Appends proposal_score rows and replaces score_summary; writes nothing
+    to `coding`. Failure rules match search_run._Judging. On any error the score is marked
+    failed, rows already committed stay, and the error is re-raised."""
+    scoring: _Scoring | None = None
+    try:
+        proposal = get_proposal(db_t, proposal_id)
+        code = db_t.get(Code, proposal.code_id)
+        proposed = dict(proposal.proposed or {})
+        scoring = _Scoring(code.threshold, float(proposed.get("threshold", code.threshold)))
+        proposal.score_status, proposal.score_summary = "running", scoring.summary()
+        db_t.commit()
+
+        judged = _judged(db_t, code.id)
+        texts = dict(
+            db_c.execute(select(Highlight.id, Highlight.text).where(Highlight.id.in_(list(judged)))).all()
+        ) if judged else {}
+        hids = sorted(h for h in judged if h in texts)
+        config = get_config()
+        size = max(1, config.search.jev_concurrency)
+        failed_batches = 0
+
+        def body(hid: int) -> dict:
+            return build_keyed_request(
+                {"id": hid, "text": texts[hid]},
+                [
+                    (CUR, search_run.code_instructions(db_t, code, texts, exclude_highlight=hid)),
+                    (NEW, search_run.code_instructions(db_t, code, texts, exclude_highlight=hid, override=proposed)),
+                ],
+                config.jev.model,
+            )
+
+        with ThreadPoolExecutor(max_workers=size) as pool:
+            for start in range(0, len(hids), size):
+                batch = hids[start : start + size]
+                futures = [pool.submit(client.judge, body(hid)) for hid in batch]
+                error: JevError | None = None
+                batch_failures = 0
+                for hid, future in zip(batch, futures):
+                    try:
+                        response = future.result()
+                    except JevError as exc:
+                        if exc.status in search_run.FATAL_JEV_STATUSES:
+                            raise
+                        log.warning("Proposal %s score: Jev request for highlight %s failed: %s", proposal_id, hid, exc)
+                        error, batch_failures = exc, batch_failures + 1
+                        scoring.failed_requests += 1
+                        continue
+                    answers, missing = parse_keyed_noul(response, [CUR, NEW])
+                    scoring.missing_answers += len(missing)
+                    current_p, proposed_p = answers.get(CUR), answers.get(NEW)
+                    db_t.add(
+                        ProposalScore(
+                            proposal_id=proposal_id, highlight_id=hid, human=judged[hid],
+                            current_p=current_p, proposed_p=proposed_p,
+                        )
+                    )
+                    scoring.add(judged[hid], current_p, proposed_p)
+                    proposal.score_summary = scoring.summary()
+                    db_t.commit()
+                if batch_failures:
+                    proposal.score_summary = scoring.summary()
+                    db_t.commit()
+                failed_batches = failed_batches + 1 if batch_failures == len(batch) else 0
+                if failed_batches >= search_run.MAX_CONSECUTIVE_FAILED_BATCHES:
+                    raise error
+
+        proposal.score_status, proposal.score_summary = "done", scoring.summary()
+        db_t.commit()
+    except Exception as exc:
+        db_t.rollback()
+        proposal = db_t.get(DriftProposal, proposal_id)
+        if proposal is not None:
+            proposal.score_status = "failed"
+            proposal.score_summary = {
+                **(scoring.summary() if scoring else {}), "error": f"{type(exc).__name__}: {exc}",
+            }
+            db_t.commit()
+        raise
+
+
+def start_score(proposal_id: int) -> None:
+    """Marks a suggested proposal's score running and runs it on a daemon thread with its own
+    sessions. Raises ProposalNotFound, or ScoreConflict when the proposal is not suggested or
+    any Jev job (search run or score) is running."""
+    with search_run._start_lock:
+        with TaggingSession() as db_t:
+            proposal = get_proposal(db_t, proposal_id)
+            if proposal.status != "suggested":
+                raise ScoreConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be scored.")
+            try:
+                search_run.check_no_jev_job(db_t)
+            except search_run.RunConflict as exc:
+                raise ScoreConflict(str(exc)) from exc
+            proposal.score_status, proposal.score_summary = "running", None
+            db_t.commit()
+        thread = threading.Thread(
+            target=_score_background, args=(proposal_id,), daemon=True, name=f"proposal-score-{proposal_id}"
+        )
+        _score_threads[proposal_id] = thread
+        thread.start()
+
+
+def _score_background(proposal_id: int) -> None:
+    with CorticoSession() as db_c, TaggingSession() as db_t:
+        try:
+            client = HttpJevClient()
+        except Exception as exc:
+            proposal = db_t.get(DriftProposal, proposal_id)
+            proposal.score_status = "failed"
+            proposal.score_summary = {"error": f"{type(exc).__name__}: {exc}"}
+            db_t.commit()
+            return
+        try:
+            score_proposal(db_c, db_t, proposal_id, client)
+        except Exception:
+            log.exception("Score of proposal %s failed", proposal_id)
+
+
+def join_score(proposal_id: int, timeout: float | None = None) -> None:
+    thread = _score_threads.get(proposal_id)
+    if thread is not None:
+        thread.join(timeout)
+
+
+def fail_orphaned_scores(db_t: Session) -> None:
+    """Scores left `running` by a stopped server have no thread; mark them failed."""
+    for proposal in db_t.scalars(select(DriftProposal).where(DriftProposal.score_status == "running")):
+        thread = _score_threads.get(proposal.id)
+        if thread is not None and thread.is_alive():
+            continue
+        proposal.score_status = "failed"
+        proposal.score_summary = {**(proposal.score_summary or {}), "error": "The server stopped during the score."}
+    db_t.commit()

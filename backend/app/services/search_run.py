@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_config
 from ..db import CorticoSession, TaggingSession
-from ..models import Code, CodeExemplar, Coding, RunHighlight, SearchRun
+from ..models import Code, CodeExemplar, Coding, DriftProposal, RunHighlight, SearchRun
 from ..models_cortico import Highlight
 from . import embeddings, rules
 from .embeddings import rank_candidates
@@ -401,15 +401,25 @@ def _find_more(
         judging.finish()
 
 
+# Guards check-and-start of every Jev job (search runs and drift proposal scores), so at most
+# one runs at a time.
 _start_lock = threading.Lock()
 _threads: dict[int, threading.Thread] = {}
+
+
+def check_no_jev_job(db_t: Session) -> None:
+    """Raises RunConflict while a search run or a proposal score is running. Call it under
+    _start_lock."""
+    if db_t.scalars(select(SearchRun.id).where(SearchRun.status == "running")).first() is not None:
+        raise RunConflict("A search run is already running.")
+    if db_t.scalars(select(DriftProposal.id).where(DriftProposal.score_status == "running")).first() is not None:
+        raise RunConflict("A proposal score with Jev is running.")
 
 
 def _check_can_start(db_c: Session, db_t: Session, scope_code_id: int | None) -> None:
     """A sample run (no scope code) needs only active codes; a find-more run also needs the
     code's query embedding and every highlight embedded, because it ranks by similarity."""
-    if db_t.scalars(select(SearchRun.id).where(SearchRun.status == "running")).first() is not None:
-        raise RunConflict("A search run is already running.")
+    check_no_jev_job(db_t)
     active = {c.id for c in embeddings.current_active_codes(db_t)}
     if scope_code_id is None:
         if not active:

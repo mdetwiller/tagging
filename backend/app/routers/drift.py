@@ -41,6 +41,27 @@ def proposals(code_id: int, db: Session = Depends(get_tagging_db)) -> list[dict]
     return [drift.serialize_proposal(p) for p in rows]
 
 
+@router.get("/proposals/{proposal_id}")
+def get_proposal(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dict:
+    try:
+        return drift.serialize_proposal(drift.get_proposal(db, proposal_id))
+    except drift.ProposalNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/proposals/{proposal_id}/score", status_code=202)
+def score(proposal_id: int) -> dict:
+    """Test with Jev: scores the suggested proposal against the code's human-judged
+    highlights in the background (one Jev request per highlight). Poll GET /proposals/{id}."""
+    try:
+        drift.start_score(proposal_id)
+    except drift.ProposalNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except drift.ScoreConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"proposal_id": proposal_id, "score_status": "running"}
+
+
 @router.get("/drift/spend")
 def spend(db: Session = Depends(get_tagging_db)) -> dict:
     return {"today_tokens": drift.today_tokens(db), "cap_tokens": get_config().drift.daily_token_cap}

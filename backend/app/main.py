@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import models  # noqa: F401  registers tables on Base
 from .db import Base, TaggingSession, tagging_engine
 from .routers import codebook, drift, embeddings, export, review, runs
+from .services.drift import fail_orphaned_scores
 from .services.search_run import fail_orphaned_runs
 
 
@@ -16,6 +17,7 @@ async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=tagging_engine)
     with TaggingSession() as db:
         fail_orphaned_runs(db)
+        fail_orphaned_scores(db)
     yield
 
 
