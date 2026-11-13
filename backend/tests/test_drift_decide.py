@@ -249,6 +249,12 @@ def test_rollback_only_the_newest_accepted(db, setup):
 
 
 def test_export_includes_proposals(db, setup):
+    p = db.get(DriftProposal, setup["proposal"])
+    p.ai_metadata = {
+        "model": "m-test", "reasoning_effort": "low", "prompt": "secret prompt", "input_tokens": 1000, "output_tokens": 234,
+    }
+    p.disagreements, p.session_judgments = [11, 12], 6
+    db.commit()
     assert _accept(setup["proposal"], ["threshold"]).status_code == 200
     with CorticoSession() as db_c:
         exported = build_export(db, db_c)
@@ -257,6 +263,53 @@ def test_export_includes_proposals(db, setup):
     p = proposals[0]
     assert set(p) == {
         "id", "status", "base", "proposed", "applied", "rationale", "score_summary", "tokens", "created_at", "decided_at",
+        "model", "reasoning_effort", "input_tokens", "output_tokens", "disagreements", "session_judgments",
     }
+    assert (p["model"], p["reasoning_effort"], p["input_tokens"], p["output_tokens"]) == ("m-test", "low", 1000, 234)
+    assert (p["disagreements"], p["session_judgments"]) == ([11, 12], 6)
+    assert "prompt" not in p
+    assert p["created_at"].endswith("+00:00") and p["decided_at"].endswith("+00:00")
     assert (p["id"], p["status"], p["tokens"], p["rationale"]) == (setup["proposal"], "accepted", 1234, "Too many false positives.")
     assert p["applied"]["threshold"] == 0.7 and p["decided_at"]
+
+
+def test_serialized_timestamps_are_utc_offset(db, setup):
+    res = client.post(f"/proposals/{setup['proposal']}/dismiss")
+    body = res.json()
+    assert body["created_at"].endswith("+00:00")
+    assert body["decided_at"].endswith("+00:00")
+    assert client.get(f"/proposals/{setup['proposal']}").json()["created_at"].endswith("+00:00")
+
+
+def test_stale_parts_lists_parts_changed_since_drafted(db, setup):
+    url = f"/proposals/{setup['proposal']}"
+    assert client.get(url).json()["stale_parts"] == []
+    edit_code(db, setup["code"], CodeEdit(threshold=0.6))
+    assert client.get(url).json()["stale_parts"] == ["threshold"]
+    rules.set_rules(db, setup["code"], INCLUDE, ["Something else"], source="user")
+    assert client.get(url).json()["stale_parts"] == ["threshold", "rules"]
+    edit_code(db, setup["code"], CodeEdit(name="Renamed by hand"))
+    listed = client.get(f"/codes/{setup['code']}/proposals").json()
+    assert listed[0]["stale_parts"] == ["name", "threshold", "rules"]
+    # Only a suggested proposal can be stale.
+    assert client.post(f"{url}/dismiss").json()["stale_parts"] == []
+
+
+def test_rollback_while_score_of_code_running_is_409(db, setup):
+    assert _accept(setup["proposal"], ["threshold"]).status_code == 200
+    newer = DriftProposal(
+        code_id=setup["code"], status="suggested", score_status="running",
+        base={"name": NAME, "definition": DEFINITION, "threshold": 0.7, "include": INCLUDE, "exclude": EXCLUDE},
+        proposed={"definition": "A sharper definition."},
+    )
+    db.add(newer)
+    db.commit()
+    revisions = _count(db, CodeRevision, setup["code"])
+    res = client.post(f"/proposals/{setup['proposal']}/rollback")
+    assert res.status_code == 409 and "tested with Jev" in res.json()["detail"]
+    assert _code(db, setup["code"]).threshold == 0.7
+    assert _count(db, CodeRevision, setup["code"]) == revisions
+    assert db.get(DriftProposal, setup["proposal"]).status == "accepted"
+    newer.score_status = "done"
+    db.commit()
+    assert client.post(f"/proposals/{setup['proposal']}/rollback").status_code == 200

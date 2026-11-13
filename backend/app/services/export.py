@@ -81,6 +81,12 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                 "rationale": p.rationale,
                 "score_summary": p.score_summary,
                 "tokens": p.tokens,
+                "model": (p.ai_metadata or {}).get("model"),
+                "reasoning_effort": (p.ai_metadata or {}).get("reasoning_effort"),
+                "input_tokens": (p.ai_metadata or {}).get("input_tokens"),
+                "output_tokens": (p.ai_metadata or {}).get("output_tokens"),
+                "disagreements": p.disagreements,
+                "session_judgments": p.session_judgments,
                 "created_at": _iso(p.created_at),
                 "decided_at": _iso(p.decided_at),
             }

@@ -349,3 +349,22 @@ def test_route_errors(client, db, codes, highlights, monkeypatch):
     r = client.post(f"/codes/{a}/drift", json={"session_judgments": 1})
     assert r.status_code == 502
     assert client.get(f"/codes/{a}/proposals").json()[0]["status"] == "failed"
+
+
+def test_openai_client_uses_configured_timeout(monkeypatch):
+    import openai
+
+    seen: dict = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            seen.update(kwargs)
+
+    config = get_config()
+    assert config.drift.timeout_seconds == 120
+    monkeypatch.setattr(openai, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(type(config), "openai_api_key", lambda self: "sk-fake")
+    monkeypatch.setattr(type(config), "openai_base_url", lambda self: None)
+    monkeypatch.setattr(config.drift, "timeout_seconds", 42.0)
+    drift.OpenAIDriftClient()
+    assert seen["timeout"] == 42.0

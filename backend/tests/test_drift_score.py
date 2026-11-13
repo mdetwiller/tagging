@@ -328,3 +328,35 @@ def test_early_background_error_leaves_no_running_score(db, setup, fake_http, mo
         drift.join_score(setup["proposal"], timeout=30)
     db.expire_all()
     assert db.get(DriftProposal, setup["proposal"]).score_status == "done"
+
+
+def test_threshold_only_proposal_asks_one_question_scored_against_both_thresholds(db, setup):
+    p = db.get(DriftProposal, setup["proposal"])
+    p.proposed = {"threshold": 0.7}
+    db.commit()
+    client = FakeJev(_score_fn(setup))
+    p = _run_score(db, setup, client)
+    assert p.score_status == "done"
+    assert len(client.bodies) == 8
+    for body in client.bodies:
+        assert set(body["questions"]) == {"cur"}
+    human = [True] * 4 + [False] * 4
+    assert p.score_summary == {
+        "before": judgments.agreement_stats(zip(human, [x >= 0.5 for x in CUR])),
+        "after": judgments.agreement_stats(zip(human, [x >= 0.7 for x in CUR])),
+        "missing_answers": 0,
+        "failed_requests": 0,
+    }
+    assert p.score_summary["before"] != p.score_summary["after"]
+    rows = db.scalars(select(ProposalScore).where(ProposalScore.proposal_id == p.id)).all()
+    assert all(r.proposed_p == r.current_p for r in rows)
+
+
+def test_score_of_retired_code_is_409(db, setup):
+    db.get(Code, setup["code"]).status = "RETIRED"
+    db.commit()
+    with TestClient(app) as c:
+        resp = c.post(f"/proposals/{setup['proposal']}/score")
+    assert resp.status_code == 409 and "retired" in resp.json()["detail"]
+    db.expire_all()
+    assert db.get(DriftProposal, setup["proposal"]).score_status == "none"

@@ -17,6 +17,7 @@ from ..models_cortico import Highlight
 from ..schemas import CodeEdit
 from . import judgments, rules, search_run
 from .codebook_edit import CodeNotFound, edit_code
+from .export import _iso
 from .jev import HttpJevClient, JevClient, JevError, build_keyed_request, parse_keyed_noul
 
 log = logging.getLogger(__name__)
@@ -77,7 +78,9 @@ class OpenAIDriftClient:
             raise RuntimeError("OPENAI_API_KEY is not set in the environment or backend/.env.")
         from openai import OpenAI
 
-        self._client = OpenAI(api_key=api_key, base_url=config.openai_base_url() or None)
+        self._client = OpenAI(
+            api_key=api_key, base_url=config.openai_base_url() or None, timeout=config.drift.timeout_seconds
+        )
         self._model = config.drift.model
         self._effort = config.drift.reasoning_effort
 
@@ -329,11 +332,21 @@ def draft(
     return proposal
 
 
-def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+def stale_parts(db: Session, p: DriftProposal) -> list[str]:
+    """For a suggested proposal, the parts whose live value no longer matches `base` (accepting
+    them would be refused). Empty for any other status."""
+    if p.status != "suggested" or not p.base:
+        return []
+    code = db.get(Code, p.code_id)
+    if code is None:
+        return []
+    current = _base(db, code)
+    return [
+        part for part, fields in PART_FIELDS.items() if any(current[f] != p.base.get(f) for f in fields)
+    ]
 
 
-def serialize_proposal(p: DriftProposal) -> dict:
+def serialize_proposal(db: Session, p: DriftProposal) -> dict:
     return {
         "id": p.id,
         "code_id": p.code_id,
@@ -350,6 +363,7 @@ def serialize_proposal(p: DriftProposal) -> dict:
         "score_summary": p.score_summary,
         "created_at": _iso(p.created_at),
         "decided_at": _iso(p.decided_at),
+        "stale_parts": stale_parts(db, p),
     }
 
 
@@ -422,7 +436,8 @@ class _Scoring:
 def score_proposal(db_c: Session, db_t: Session, proposal_id: int, client: JevClient) -> None:
     """Asks Jev, for each highlight judged by a human for the proposal's code, the current
     question (`cur`) and the proposed one (`new`), with the highlight left out of both
-    questions' examples. Appends proposal_score rows and replaces score_summary; writes nothing
+    questions' examples. When the two texts are the same (a threshold-only proposal) only `cur`
+    is asked, and its probability is scored against both thresholds. Appends proposal_score rows and replaces score_summary; writes nothing
     to `coding`. Failure rules match search_run._Judging. On any error the score is marked
     failed, rows already committed stay, and the error is re-raised."""
     scoring: _Scoring | None = None
@@ -443,23 +458,23 @@ def score_proposal(db_c: Session, db_t: Session, proposal_id: int, client: JevCl
         size = max(1, config.search.jev_concurrency)
         failed_batches = 0
 
-        def body(hid: int) -> dict:
-            return build_keyed_request(
-                {"id": hid, "text": texts[hid]},
-                [
-                    (CUR, search_run.code_instructions(db_t, code, texts, exclude_highlight=hid)),
-                    (NEW, search_run.code_instructions(db_t, code, texts, exclude_highlight=hid, override=proposed)),
-                ],
-                config.jev.model,
-            )
+        def body(hid: int) -> tuple[dict, list[str]]:
+            """The request and its question keys. When the proposal changes only the threshold
+            the two questions are the same text, so only `cur` is asked and serves both."""
+            cur = search_run.code_instructions(db_t, code, texts, exclude_highlight=hid)
+            new = search_run.code_instructions(db_t, code, texts, exclude_highlight=hid, override=proposed)
+            questions = [(CUR, cur)] if cur == new else [(CUR, cur), (NEW, new)]
+            keys = [k for k, _ in questions]
+            return build_keyed_request({"id": hid, "text": texts[hid]}, questions, config.jev.model), keys
 
         with ThreadPoolExecutor(max_workers=size) as pool:
             for start in range(0, len(hids), size):
                 batch = hids[start : start + size]
-                futures = [pool.submit(client.judge, body(hid)) for hid in batch]
+                requests = [body(hid) for hid in batch]
+                futures = [pool.submit(client.judge, request) for request, _ in requests]
                 error: JevError | None = None
                 batch_failures = 0
-                for hid, future in zip(batch, futures):
+                for hid, (_, keys), future in zip(batch, requests, futures):
                     try:
                         response = future.result()
                     except JevError as exc:
@@ -469,9 +484,10 @@ def score_proposal(db_c: Session, db_t: Session, proposal_id: int, client: JevCl
                         error, batch_failures = exc, batch_failures + 1
                         scoring.failed_requests += 1
                         continue
-                    answers, missing = parse_keyed_noul(response, [CUR, NEW])
+                    answers, missing = parse_keyed_noul(response, keys)
                     scoring.missing_answers += len(missing)
-                    current_p, proposed_p = answers.get(CUR), answers.get(NEW)
+                    current_p = answers.get(CUR)
+                    proposed_p = answers.get(NEW) if NEW in keys else current_p
                     db_t.add(
                         ProposalScore(
                             proposal_id=proposal_id, highlight_id=hid, human=judged[hid],
@@ -504,13 +520,17 @@ def score_proposal(db_c: Session, db_t: Session, proposal_id: int, client: JevCl
 
 def start_score(proposal_id: int) -> None:
     """Marks a suggested proposal's score running and runs it on a daemon thread with its own
-    sessions. Raises ProposalNotFound, or ScoreConflict when the proposal is not suggested or
-    any Jev job (search run or score) is running."""
+    sessions. Raises ProposalNotFound, or ScoreConflict when the proposal is not suggested, its
+    code is not active, or any Jev job (search run or score) is running."""
     with search_run._start_lock:
         with TaggingSession() as db_t:
             proposal = get_proposal(db_t, proposal_id)
             if proposal.status != "suggested":
                 raise ScoreConflict(f"Proposal {proposal_id} is {proposal.status}; only a suggested proposal can be scored.")
+            code = db_t.get(Code, proposal.code_id)
+            if code is None or code.status != "ACTIVE":
+                status = code.status.lower() if code is not None else "missing"
+                raise ScoreConflict(f"Code {proposal.code_id} is {status}; a proposal for it cannot be scored.")
             try:
                 search_run.check_no_jev_job(db_t)
             except search_run.RunConflict as exc:
@@ -709,37 +729,47 @@ def dismiss(db: Session, proposal_id: int) -> DriftProposal:
 def rollback(db: Session, proposal_id: int) -> DriftProposal:
     """Restores the `base` values of the code's newest accepted proposal, provided nothing
     the proposal applied has been changed since."""
-    proposal = get_proposal(db, proposal_id)
-    newest = db.scalars(
-        select(DriftProposal)
-        .where(DriftProposal.code_id == proposal.code_id, DriftProposal.status == "accepted")
-        .order_by(DriftProposal.id.desc())
-        .limit(1)
-    ).first()
-    if newest is None or newest.id != proposal.id:
-        raise DecisionConflict(
-            f"Proposal {proposal_id} is {proposal.status}; only the code's newest accepted proposal can be rolled back."
-        )
-    applied = dict(proposal.applied or {})
-    code = db.get(Code, proposal.code_id)
-    current = _base(db, code)
-    restore: dict = {}
-    for part, fields in PART_FIELDS.items():
-        if not all(f in applied for f in fields):
-            continue
-        if any(current[f] != applied[f] for f in fields):
+    with search_run._start_lock:  # a score of this code cannot start mid-rollback
+        proposal = get_proposal(db, proposal_id)
+        newest = db.scalars(
+            select(DriftProposal)
+            .where(DriftProposal.code_id == proposal.code_id, DriftProposal.status == "accepted")
+            .order_by(DriftProposal.id.desc())
+            .limit(1)
+        ).first()
+        if newest is None or newest.id != proposal.id:
             raise DecisionConflict(
-                f"The code's {part} was changed after proposal {proposal_id} was accepted; "
-                f"field '{part}' no longer matches what the proposal applied."
+                f"Proposal {proposal_id} is {proposal.status}; only the code's newest accepted proposal can be rolled back."
             )
-        restore.update({f: proposal.base[f] for f in fields})
-    if "name" in restore and restore["name"].strip().casefold() in _taken_names(db, code):
-        raise DecisionConflict(f"Another active code is now named {restore['name']!r}; field 'name' cannot be restored.")
+        running = db.scalars(
+            select(DriftProposal.id).where(
+                DriftProposal.code_id == proposal.code_id, DriftProposal.score_status == "running"
+            )
+        ).first()
+        if running is not None:
+            raise DecisionConflict(
+                f"Proposal {running} for this code is being tested with Jev; roll back when the test finishes."
+            )
+        applied = dict(proposal.applied or {})
+        code = db.get(Code, proposal.code_id)
+        current = _base(db, code)
+        restore: dict = {}
+        for part, fields in PART_FIELDS.items():
+            if not all(f in applied for f in fields):
+                continue
+            if any(current[f] != applied[f] for f in fields):
+                raise DecisionConflict(
+                    f"The code's {part} was changed after proposal {proposal_id} was accepted; "
+                    f"field '{part}' no longer matches what the proposal applied."
+                )
+            restore.update({f: proposal.base[f] for f in fields})
+        if "name" in restore and restore["name"].strip().casefold() in _taken_names(db, code):
+            raise DecisionConflict(f"Another active code is now named {restore['name']!r}; field 'name' cannot be restored.")
 
-    revision_ids = _apply(db, code.id, restore, "rollback", proposal.id)
-    proposal.status = "rolled_back"
-    proposal.applied = {**applied, "rollback_revision_ids": revision_ids}
-    proposal.decided_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(proposal)
-    return proposal
+        revision_ids = _apply(db, code.id, restore, "rollback", proposal.id)
+        proposal.status = "rolled_back"
+        proposal.applied = {**applied, "rollback_revision_ids": revision_ids}
+        proposal.decided_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(proposal)
+        return proposal

@@ -72,6 +72,7 @@ class DriftConfig(BaseModel):
     reasoning_effort: str
     daily_token_cap: int
     max_judged_examples: int
+    timeout_seconds: float
 
 
 class Config(BaseModel):

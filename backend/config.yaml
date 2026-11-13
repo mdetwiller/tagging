@@ -29,3 +29,4 @@ drift:
   reasoning_effort: low
   daily_token_cap: 500000  # input plus output tokens of today's (local day) proposals
   max_judged_examples: 40
+  timeout_seconds: 120  # per OpenAI call when drafting a proposal

@@ -29,7 +29,7 @@ def draft(code_id: int, body: DriftRequest, db: Session = Depends(get_tagging_db
         ) from exc
     if proposal is None:
         return {"status": "no_disagreement"}
-    return drift.serialize_proposal(proposal)
+    return drift.serialize_proposal(db, proposal)
 
 
 @router.get("/codes/{code_id}/proposals")
@@ -38,13 +38,13 @@ def proposals(code_id: int, db: Session = Depends(get_tagging_db)) -> list[dict]
         rows = drift.proposals_for(db, code_id)
     except drift.CodeNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Code {code_id} does not exist.") from exc
-    return [drift.serialize_proposal(p) for p in rows]
+    return [drift.serialize_proposal(db, p) for p in rows]
 
 
 @router.get("/proposals/{proposal_id}")
 def get_proposal(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dict:
     try:
-        return drift.serialize_proposal(drift.get_proposal(db, proposal_id))
+        return drift.serialize_proposal(db, drift.get_proposal(db, proposal_id))
     except drift.ProposalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -52,7 +52,8 @@ def get_proposal(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dic
 @router.post("/proposals/{proposal_id}/score", status_code=202)
 def score(proposal_id: int) -> dict:
     """Test with Jev: scores the suggested proposal against the code's human-judged
-    highlights in the background (one Jev request per highlight). Poll GET /proposals/{id}."""
+    highlights in the background (one Jev request per highlight). 409 when the proposal is not
+    suggested, its code is not active, or any Jev job is running. Poll GET /proposals/{id}."""
     try:
         drift.start_score(proposal_id)
     except drift.ProposalNotFound as exc:
@@ -68,24 +69,24 @@ def accept(proposal_id: int, body: AcceptProposalRequest, db: Session = Depends(
     409 when the proposal is not suggested, is being scored, or a chosen field has changed
     since the draft."""
     values = body.values.model_dump(exclude_unset=True) if body.values else None
-    return _decide(lambda: drift.accept(db, proposal_id, list(body.parts), values))
+    return _decide(db, lambda: drift.accept(db, proposal_id, list(body.parts), values))
 
 
 @router.post("/proposals/{proposal_id}/dismiss")
 def dismiss(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dict:
-    return _decide(lambda: drift.dismiss(db, proposal_id))
+    return _decide(db, lambda: drift.dismiss(db, proposal_id))
 
 
 @router.post("/proposals/{proposal_id}/rollback")
 def rollback(proposal_id: int, db: Session = Depends(get_tagging_db)) -> dict:
     """Restores the code's values from before its newest accepted proposal. 409 when a field
-    the proposal applied has been changed since."""
-    return _decide(lambda: drift.rollback(db, proposal_id))
+    the proposal applied has been changed since, or a proposal for the code is being scored."""
+    return _decide(db, lambda: drift.rollback(db, proposal_id))
 
 
-def _decide(action) -> dict:
+def _decide(db: Session, action) -> dict:
     try:
-        return drift.serialize_proposal(action())
+        return drift.serialize_proposal(db, action())
     except drift.ProposalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except drift.DecisionConflict as exc:
