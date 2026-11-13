@@ -376,3 +376,24 @@ def test_agreement_route(client, db, codes, highlights):
     body = client.get(f"/codes/{a}/agreement").json()
     assert (body["n"], body["both_yes"], body["ai_only"]) == (2, 1, 1)
     assert client.get("/codes/999999/agreement").status_code == 404
+
+
+def test_agreement_stats_empty():
+    result = judgments.agreement_stats([])
+    assert result["n"] == 0
+    assert result["kappa"] is None
+
+
+def test_agreement_stats_even_split():
+    result = judgments.agreement_stats([(True, True), (False, False), (True, False), (False, True)])
+    assert result["percent_match"] == 0.5
+    assert result["kappa"] == 0.0
+
+
+def test_disagreements_lists_mismatches_only(db, codes, highlights):
+    a = codes["A"]
+    _seed_pairs(db, a, highlights, [(True, True), (False, True), (True, False), (False, False)])
+    _ai(db, a, highlights[4], 0.9)
+    judgments.judge(db, a, [highlights[5][0]], True)
+    expected = sorted([highlights[1][0], highlights[2][0]])
+    assert judgments.disagreements(db, a) == expected

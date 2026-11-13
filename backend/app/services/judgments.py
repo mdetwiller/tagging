@@ -125,18 +125,23 @@ def final_for(db: Session, code_id: int, highlight_id: int) -> bool | None:
     return latest.final(code.threshold) if latest else None
 
 
-def agreement(db: Session, code_id: int) -> dict:
-    """Human vs AI over highlights that have both, using the latest row of each; AI yes is a
-    probability at or above the code's current threshold."""
+def _human_ai_pairs(db: Session, code_id: int) -> list[tuple[int, bool, bool]]:
+    """(highlight_id, human yes, AI yes) for highlights with both sides, by highlight id."""
     code = db.get(Code, code_id)
     if code is None:
         raise CodeNotFound(code_id)
-    counts = {"both_yes": 0, "both_no": 0, "human_only": 0, "ai_only": 0}
-    for latest in latest_by_pair(db, [code_id]).values():
+    out = []
+    for (_, highlight_id), latest in latest_by_pair(db, [code_id]).items():
         if latest.human is None or latest.ai_probability is None:
             continue
-        human = latest.human == "applied"
-        ai = latest.ai_probability >= code.threshold
+        out.append((highlight_id, latest.human == "applied", latest.ai_probability >= code.threshold))
+    return sorted(out)
+
+
+def agreement_stats(pairs: Iterable[tuple[bool, bool]]) -> dict:
+    """Agreement counts, percent match and Cohen's kappa over (human, AI) yes/no pairs."""
+    counts = {"both_yes": 0, "both_no": 0, "human_only": 0, "ai_only": 0}
+    for human, ai in pairs:
         key = "both_yes" if human and ai else "both_no" if not human and not ai else "human_only" if human else "ai_only"
         counts[key] += 1
     n = sum(counts.values())
@@ -149,6 +154,17 @@ def agreement(db: Session, code_id: int) -> dict:
         if expected < 1:
             kappa = (percent_match - expected) / (1 - expected)
     return {"n": n, **counts, "percent_match": percent_match, "kappa": kappa}
+
+
+def agreement(db: Session, code_id: int) -> dict:
+    """Human vs AI over highlights that have both, using the latest row of each; AI yes is a
+    probability at or above the code's current threshold."""
+    return agreement_stats((human, ai) for _, human, ai in _human_ai_pairs(db, code_id))
+
+
+def disagreements(db: Session, code_id: int) -> list[int]:
+    """Highlight ids, ascending, whose latest human call and latest AI call differ."""
+    return [hid for hid, human, ai in _human_ai_pairs(db, code_id) if human != ai]
 
 
 def current_samples(db: Session) -> dict[int, tuple[int, dict]]:
