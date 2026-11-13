@@ -224,7 +224,8 @@ def test_highlight_status_rejects_unknown(client, db, highlights):
 
 
 def _run_rows(db, code_id: int, rows: list[tuple[int, str]]) -> int:
-    run = SearchRun(scope_code_id=code_id, status="done")
+    """A finished find-more run for the code with these (highlight_id, picked_by) rows."""
+    run = SearchRun(scope_code_id=code_id, status="done", summary={"kind": "find_more"})
     db.add(run)
     db.flush()
     for position, (hid, picked_by) in enumerate(rows, start=1):
@@ -233,46 +234,98 @@ def _run_rows(db, code_id: int, rows: list[tuple[int, str]]) -> int:
     return run.id
 
 
-def test_review_splits_found_and_random(client, db, codes, highlights):
-    a = codes["A"]
+def _sample_run(db, judged: list[tuple[tuple[int, int], dict[int, float]]]) -> int:
+    """A finished sample run that judged each highlight, with AI rows {code_id: p}."""
+    codes = {c for _, ps in judged for c in ps}
+    run = SearchRun(
+        scope_code_id=None, status="done",
+        summary={"kind": "sample", "codes": {str(c): {"positives": 0, "tries": 0, "few": True} for c in codes}},
+    )
+    db.add(run)
+    db.commit()
+    for highlight, ps in judged:
+        for code_id, p in ps.items():
+            _ai(db, code_id, highlight, p, run.id)
+    return run.id
+
+
+def _ids(rows: list[dict]) -> list[int]:
+    return [r["highlight_id"] for r in rows]
+
+
+def test_review_combines_sample_and_find_more_runs(client, db, codes, highlights):
+    a, b = codes["A"], codes["B"]
     h = [x[0] for x in highlights]
-    old_run = _run_rows(db, a, [(h[10], "similarity"), (h[11], "random")])
-    run = _run_rows(db, a, [(h[0], "similarity"), (h[1], "similarity"), (h[2], "random")])
-    _ai(db, a, highlights[0], 0.9, run)
-    _ai(db, a, highlights[1], 0.2, run)
-    _ai(db, a, highlights[2], 0.3, run)
-    judgments.judge(db, a, [h[1]], False)
-    # A final yes from outside this run is listed under found too.
+    hl = highlights
+    # h2 got no answer for A, but the sample still judged it (for B).
+    sample = _sample_run(db, [(hl[0], {a: 0.9, b: 0.1}), (hl[1], {a: 0.2, b: 0.1}), (hl[2], {b: 0.5})])
+    older = _run_rows(db, a, [(h[3], "similarity"), (h[4], "random"), (h[0], "similarity")])
+    _ai(db, a, hl[3], 0.8, older)
+    _ai(db, a, hl[4], 0.1, older)
+    newer = _run_rows(db, a, [(h[5], "similarity"), (h[6], "similarity"), (h[1], "random")])
+    _ai(db, a, hl[5], 0.1, newer)
+    _ai(db, a, hl[6], 0.95, newer)
+    # A final yes from no run is listed under found too.
     judgments.judge(db, a, [h[15]], True)
 
     body = client.get(f"/codes/{a}/review").json()
     assert body["code"]["id"] == a
-    assert body["run_id"] == run
-    # h[1] scored 0.2 and was rejected, so it is below the threshold, not found.
-    assert [r["highlight_id"] for r in body["found"]] == [h[0], h[15]]
-    assert [r["highlight_id"] for r in body["below_threshold"]] == [h[1]]
-    assert [r["highlight_id"] for r in body["random"]] == [h[2]]
-    assert body["agreement"]["n"] == 1
+    assert "run_id" not in body
+    assert body["sample_run_id"] == sample
+    assert body["find_more_run_ids"] == [newer, older]
+    assert _ids(body["found"]) == [h[0], h[6], h[3], h[15]]
+    assert [r["source"] for r in body["found"]] == ["sample", "search", "search", None]
+    assert _ids(body["random"]) == [h[1], h[2], h[4]]
+    assert [r["source"] for r in body["random"]] == ["sample", "sample", "random"]
+    assert _ids(body["below_threshold"]) == [h[5]]
+    assert body["below_threshold"][0]["source"] == "search"
+    listed = _ids(body["found"]) + _ids(body["random"]) + _ids(body["below_threshold"])
+    assert len(listed) == len(set(listed))
 
-    first, second = body["found"][0], body["below_threshold"][0]
+    first = body["found"][0]
     with CorticoSession() as s:
-        hl = s.get(Highlight, h[0])
-        project_id = s.get(Conversation, hl.conversation_id).project_id
-        text = hl.text
+        row = s.get(Highlight, h[0])
+        project_id = s.get(Conversation, row.conversation_id).project_id
+        text = row.text
     assert first == {
-        "highlight_id": h[0], "conversation_id": hl.conversation_id, "project_id": project_id,
+        "highlight_id": h[0], "conversation_id": row.conversation_id, "project_id": project_id,
         "text": text, "ai_probability": 0.9, "human": None, "final": True,
-        "status": first["status"],
-        "other_codes": [{"code_id": codes["B"], "name": "B", "final": None}, {"code_id": codes["C"], "name": "C", "final": None}],
+        "status": first["status"], "source": "sample",
+        "other_codes": [{"code_id": b, "name": "B", "final": False}, {"code_id": codes["C"], "name": "C", "final": None}],
     }
     assert first["status"] in ("not_started", "in_progress", "completed")
-    assert (second["human"], second["final"]) == ("not_applied", False)
 
-    older = client.get(f"/codes/{a}/review", params={"run_id": old_run}).json()
-    # h[0] is a final yes (AI 0.9) from the newer run, so it comes before h[15], which no run listed.
-    assert [r["highlight_id"] for r in older["found"]] == [h[0], h[15]]
-    assert [r["highlight_id"] for r in older["below_threshold"]] == [h[10]]
-    assert [r["highlight_id"] for r in older["random"]] == [h[11]]
+
+def test_review_uses_only_latest_sample_run(client, db, codes, highlights):
+    a = codes["A"]
+    h = [x[0] for x in highlights]
+    hl = highlights
+    _sample_run(db, [(hl[10], {a: 0.1}), (hl[11], {a: 0.8})])
+    latest = _sample_run(db, [(hl[20], {a: 0.1})])
+    # A sample run that failed before its first answer lists no codes and is skipped.
+    db.add(SearchRun(scope_code_id=None, status="failed", summary={"kind": "sample", "error": "boom"}))
+    db.commit()
+
+    body = client.get(f"/codes/{a}/review").json()
+    assert body["sample_run_id"] == latest
+    assert _ids(body["random"]) == [h[20]]
+    # The older sample's h11 is still a final yes (AI 0.8), so it is listed, with no source.
+    assert _ids(body["found"]) == [h[11]]
+    assert body["found"][0]["source"] is None
+    assert h[10] not in _ids(body["found"]) + _ids(body["random"]) + _ids(body["below_threshold"])
+
+
+def test_review_random_pick_accepted_moves_to_found(client, db, codes, highlights):
+    a = codes["A"]
+    h = [x[0] for x in highlights]
+    run = _run_rows(db, a, [(h[0], "similarity"), (h[1], "random")])
+    _ai(db, a, highlights[1], 0.1, run)
+    judgments.judge(db, a, [h[1]], True)
+    body = client.get(f"/codes/{a}/review").json()
+    assert _ids(body["found"]) == [h[1]]
+    assert body["found"][0]["source"] == "random"
+    assert body["random"] == []
+    assert _ids(body["below_threshold"]) == [h[0]]
 
 
 def test_review_below_threshold(client, db, codes, highlights):
@@ -287,9 +340,8 @@ def test_review_below_threshold(client, db, codes, highlights):
     judgments.judge(db, a, [h[1]], True)
     _ai(db, a, highlights[2], 0.7, run)
     judgments.judge(db, a, [h[2]], False)
-    # h[3] has no AI row. h[4] is a random pick the user accepted.
+    # h[3] has no AI row. h[4] is a random pick below the threshold.
     _ai(db, a, highlights[4], 0.1, run)
-    judgments.judge(db, a, [h[4]], True)
 
     body = client.get(f"/codes/{a}/review").json()
     assert [r["highlight_id"] for r in body["found"]] == [h[1], h[2]]
@@ -312,7 +364,8 @@ def test_review_hides_retired_code_from_other_codes(client, db, codes, highlight
 
 def test_review_without_runs_and_unknown_code(client, codes):
     body = client.get(f"/codes/{codes['C']}/review").json()
-    assert (body["run_id"], body["found"], body["below_threshold"], body["random"]) == (None, [], [], [])
+    assert (body["sample_run_id"], body["find_more_run_ids"]) == (None, [])
+    assert (body["found"], body["below_threshold"], body["random"]) == ([], [], [])
     assert client.get("/codes/999999/review").status_code == 404
 
 

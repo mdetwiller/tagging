@@ -18,12 +18,11 @@ def _code_404(code_id: int) -> HTTPException:
 @router.get("/codes/{code_id}/review")
 def review(
     code_id: int,
-    run_id: int | None = None,
     db: Session = Depends(get_tagging_db),
     db_c: Session = Depends(get_cortico_db),
 ) -> dict:
     try:
-        return judgments.review(db, db_c, code_id, run_id)
+        return judgments.review(db, db_c, code_id)
     except CodeNotFound as exc:
         raise _code_404(code_id) from exc
 

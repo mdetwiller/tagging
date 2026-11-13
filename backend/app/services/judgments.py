@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_config
 from ..db import CorticoSession
-from ..models import Code, Coding, HighlightStatus, RunHighlight
+from ..models import Code, Coding, HighlightStatus, RunHighlight, SearchRun
 from ..models_cortico import Conversation, Highlight
 from . import embeddings
 from .codebook_edit import CodeNotFound
@@ -151,35 +151,61 @@ def agreement(db: Session, code_id: int) -> dict:
     return {"n": n, **counts, "percent_match": percent_match, "kappa": kappa}
 
 
-def _default_run_id(db: Session, code_id: int) -> int | None:
-    return db.scalar(
-        select(RunHighlight.run_id)
-        .where(RunHighlight.target_code_id == code_id)
-        .order_by(RunHighlight.run_id.desc())
-        .limit(1)
+def latest_sample_run_id(db: Session, code_id: int) -> int | None:
+    """The newest sample run whose summary covers the code. A run lists every code it judges
+    once its first answer is saved, so a run that failed before then, or one from before the
+    code existed, doesn't hide an earlier sample."""
+    runs = db.execute(
+        select(SearchRun.id, SearchRun.summary)
+        .where(SearchRun.scope_code_id.is_(None))
+        .order_by(SearchRun.id.desc())
     )
+    for run_id, summary in runs:
+        summary = summary or {}
+        if summary.get("kind") == "sample" and str(code_id) in (summary.get("codes") or {}):
+            return run_id
+    return None
 
 
-def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) -> dict:
+def review(db: Session, db_c: Session, code_id: int) -> dict:
+    """The latest sample run and every find-more run for the code, one row per highlight, with
+    priority found > random > below threshold. Find-more rows include older runs' per-code
+    searches (run_highlight rows targeting this code)."""
     code = db.get(Code, code_id)
     if code is None:
         raise CodeNotFound(code_id)
-    if run_id is None:
-        run_id = _default_run_id(db, code_id)
 
-    run_rows = (
+    sample_run_id = latest_sample_run_id(db, code_id)
+    # In judging order.
+    sample_ids = (
         list(
-            db.execute(
-                select(RunHighlight.highlight_id, RunHighlight.picked_by)
-                .where(RunHighlight.run_id == run_id, RunHighlight.target_code_id == code_id)
-                .order_by(RunHighlight.position, RunHighlight.id)
+            dict.fromkeys(
+                db.scalars(
+                    select(Coding.highlight_id)
+                    .where(Coding.run_id == sample_run_id, Coding.is_ai_generated.is_(True))
+                    .order_by(Coding.id)
+                )
             )
         )
-        if run_id is not None
+        if sample_run_id is not None
         else []
     )
-    similar = list(dict.fromkeys(h for h, by in run_rows if by == "similarity"))
-    random_ids = list(dict.fromkeys(h for h, by in run_rows if by == "random"))
+    # Newest run first, then run order.
+    search_rows = list(
+        db.execute(
+            select(RunHighlight.run_id, RunHighlight.highlight_id, RunHighlight.picked_by)
+            .where(RunHighlight.target_code_id == code_id)
+            .order_by(RunHighlight.run_id.desc(), RunHighlight.position, RunHighlight.id)
+        )
+    )
+    find_more_run_ids = list(dict.fromkeys(run_id for run_id, _, _ in search_rows))
+
+    # Sample wins, then a random pick in any find-more run, so labels match the sections.
+    picked_random = {hid for _, hid, by in search_rows if by == "random"}
+    source: dict[int, str] = {h: "sample" for h in sample_ids}
+    for _, hid, _ in search_rows:
+        source.setdefault(hid, "random" if hid in picked_random else "search")
+    candidates = list(source)
 
     this_code = latest_by_pair(db, [code_id])
 
@@ -188,23 +214,16 @@ def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) 
         ai_yes = latest.ai_probability is not None and latest.ai_probability >= code.threshold
         return ai_yes or latest.final(code.threshold) is True
 
-    found_similar = [h for h in similar if is_found(h)]
-    below_ids = [h for h in similar if not is_found(h)]
+    found_listed = [h for h in candidates if is_found(h)]
+    found_set = set(found_listed)
+    random_ids = [h for h in candidates if h not in found_set and source[h] in ("sample", "random")]
+    random_set = set(random_ids)
+    below_ids = [h for h in candidates if h not in found_set and h not in random_set]
     final_yes = [h for (_, h), latest in this_code.items() if latest.final(code.threshold) is True]
-    in_run = set(similar) | set(random_ids)
-    extra = [h for h in final_yes if h not in in_run]
-    # Extra final-yes highlights: newest run that listed them first, then newest judgment.
-    last_run = dict(
-        db.execute(
-            select(RunHighlight.highlight_id, RunHighlight.run_id)
-            .where(RunHighlight.target_code_id == code_id, RunHighlight.highlight_id.in_(extra))
-            .order_by(RunHighlight.run_id)
-        ).all()
-    )
-    extra.sort(
-        key=lambda h: (-(last_run.get(h) or 0), -max(this_code[(code_id, h)].human_id, this_code[(code_id, h)].ai_id))
-    )
-    found_ids = found_similar + extra
+    extra = [h for h in final_yes if h not in source]
+    # Final-yes highlights from no current source: newest judgment first.
+    extra.sort(key=lambda h: -max(this_code[(code_id, h)].human_id, this_code[(code_id, h)].ai_id))
+    found_ids = found_listed + extra
 
     listed = list(dict.fromkeys(found_ids + below_ids + random_ids))
     others = [c for c in embeddings.current_active_codes(db) if c.id != code_id]
@@ -238,6 +257,7 @@ def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) 
             "human": latest.human,
             "final": latest.final(code.threshold),
             "status": statuses.get(hid, "not_started"),
+            "source": source.get(hid),
             "other_codes": [
                 {
                     "code_id": c.id,
@@ -250,7 +270,8 @@ def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) 
 
     return {
         "code": {"id": code.id, "name": code.name, "definition": code.definition, "threshold": code.threshold, "status": code.status},
-        "run_id": run_id,
+        "sample_run_id": sample_run_id,
+        "find_more_run_ids": find_more_run_ids,
         "agreement": agreement(db, code_id),
         "found": [row(h) for h in found_ids],
         "below_threshold": [row(h) for h in below_ids],
