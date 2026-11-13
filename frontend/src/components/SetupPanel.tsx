@@ -14,6 +14,8 @@ export default function SetupPanel({ codebook, embedding, onChanged, onClose }: 
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // A chosen file waits here while the user confirms leaving earlier judgments behind.
+  const [pending, setPending] = useState<{ file: File; judgments: number } | null>(null);
 
   const [confirming, setConfirming] = useState(false);
   const [embedRunning, setEmbeddingRunning] = useState(false);
@@ -24,6 +26,22 @@ export default function SetupPanel({ codebook, embedding, onChanged, onClose }: 
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    setImportError(null);
+    setImportResult(null);
+    let judgments = 0;
+    if (codebook) {
+      try {
+        judgments = (await api.currentCodebook()).human_judgments;
+      } catch {
+        judgments = codebook.human_judgments;
+      }
+    }
+    if (judgments > 0) setPending({ file, judgments });
+    else await importFile(file);
+  }
+
+  async function importFile(file: File) {
+    setPending(null);
     setImporting(true);
     setImportError(null);
     setImportResult(null);
@@ -74,8 +92,18 @@ export default function SetupPanel({ codebook, embedding, onChanged, onClose }: 
         </p>
         <label className="file">
           Import reconciled JSON{" "}
-          <input type="file" accept=".json,application/json" onChange={onFile} disabled={importing} />
+          <input type="file" accept=".json,application/json" onChange={onFile} disabled={importing || pending !== null} />
         </label>
+        {pending && (
+          <div className="confirm">
+            <p>
+              Your {pending.judgments.toLocaleString()} judgments on the current codebook won't carry over to the new
+              codebook or appear in its export.
+            </p>
+            <button onClick={() => importFile(pending.file)}>Import anyway</button>{" "}
+            <button onClick={() => setPending(null)}>Cancel</button>
+          </div>
+        )}
         {importing && <p className="muted">Importing…</p>}
         {importError && <p className="error">{importError}</p>}
         {importResult && (

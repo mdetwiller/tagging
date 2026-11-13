@@ -19,6 +19,8 @@ export interface Codebook {
   id: number;
   name: string;
   codes: CodeOut[];
+  /** Human (non-AI) coding rows on this codebook's codes; a re-import leaves them behind. */
+  human_judgments: number;
 }
 
 /** PATCH /codes/{id}. Omitted fields are unchanged; `parent_code_id: null` moves to the top level. */

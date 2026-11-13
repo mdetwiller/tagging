@@ -36,7 +36,10 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 
 1. Import Codestormer's `reconciled_codebook.json` in the setup panel. Codes with an empty
    definition are flagged. Re-importing creates a new codebook; the older one stays active
-   and "current" is the newest by id.
+   and "current" is the newest by id. Judgments don't carry over: when the current codebook
+   has any (`human_judgments` in `GET /codebooks/current`), choosing a file first asks you
+   to confirm with "Import anyway" or "Cancel". The export covers only the current codebook
+   and lists older ones with their coding counts in `x_tagging.earlier_codebooks`.
 2. Embed the highlights and code queries. This is a paid OpenAI call
    (`text-embedding-3-small`, about 1.02M tokens, about $0.02) behind an estimate and a
    confirm step (`POST /embeddings` needs `{"confirm": true}`). Later runs of the job embed

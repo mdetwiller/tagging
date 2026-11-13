@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.config import TAGGING_DIR
 from app.db import TaggingSession
 from app.main import app
-from app.models import Code, CodeExemplar
+from app.models import Code, CodeExemplar, Coding
 from app.services.codebook_import import import_reconciled
 
 FIXTURE = Path(__file__).parent / "fixtures" / "reconciled_small.json"
@@ -134,10 +134,27 @@ def test_reimport_creates_new_codebook():
         "id", "name", "definition", "parent_code_id", "status", "threshold",
         "display_order", "exemplar_count", "children",
     }
+    assert body["human_judgments"] == 0
     assert [c["name"] for c in tech["children"]] == ["Digital Disconnection", "Data Centers in Community"]
     assert tech["children"][0]["exemplar_count"] == 1
     assert tech["children"][0]["parent_code_id"] == tech["id"]
     assert tech["children"][0]["children"] == []
+
+
+def test_current_counts_human_judgments(db):
+    raw = FIXTURE.read_bytes()
+    with TestClient(app) as client:
+        book_id = client.post("/codebooks/import", files={"file": ("r.json", raw, "application/json")}).json()[
+            "codebook_id"
+        ]
+        code_id = _codes(db, book_id)[0].id
+        for is_ai, status in ((False, "applied"), (False, "not_applied"), (True, "suggested")):
+            db.add(Coding(code_id=code_id, highlight_id=1, conversation_id=1, status=status,
+                          is_ai_generated=is_ai, ai_probability=0.5 if is_ai else None, created_by=101))
+        db.commit()
+        assert client.get("/codebooks/current").json()["human_judgments"] == 2
+        client.post("/codebooks/import", files={"file": ("r.json", raw, "application/json")})
+        assert client.get("/codebooks/current").json()["human_judgments"] == 0
 
 
 @pytest.mark.skipif(not REAL_FILE.is_file(), reason="Codestormer reconciled codebook not present")

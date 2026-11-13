@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import Code, Codebook, CodeRevision, Coding
@@ -56,6 +56,15 @@ def build_export(db_t: Session, db_c: Session) -> dict:
             {"field": rev.field, "before": rev.before, "after": rev.after, "created_at": _iso(rev.created_at)}
         )
 
+    earlier = db_t.execute(
+        select(Codebook.id, Codebook.name, func.count(Coding.id))
+        .outerjoin(Code, Code.codebook_id == Codebook.id)
+        .outerjoin(Coding, Coding.code_id == Code.id)
+        .where(Codebook.id < codebook.id)
+        .group_by(Codebook.id, Codebook.name)
+        .order_by(Codebook.id)
+    ).all()
+
     return {
         "exported_at": _iso(datetime.now(timezone.utc)),
         "codebook": {
@@ -100,5 +109,7 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                 for c in codes
             },
             "deviations": list(DEVIATIONS),
+            # Re-importing starts a new codebook; codings on older ones are counted, not exported.
+            "earlier_codebooks": [{"id": i, "name": n, "codings": count} for i, n, count in earlier],
         },
     }

@@ -159,6 +159,27 @@ def test_export_is_json_serialisable(db, db_c, codes, highlights):
     assert all(isinstance(c["created_at"], str) for c in out["codings"])
 
 
+def test_export_counts_earlier_codebooks(db, db_c, highlights):
+    old = Codebook(name="older book")
+    db.add(old)
+    db.flush()
+    old_code = Code(codebook_id=old.id, name="Old", definition="Old code.")
+    db.add(old_code)
+    db.commit()
+    judgments.judge(db, old_code.id, [highlights[0][0], highlights[1][0]], True)
+    _ai(db, old_code.id, highlights[2], 0.9)
+    new = Codebook(name="newer book")
+    db.add(new)
+    db.flush()
+    db.add(Code(codebook_id=new.id, name="New", definition="New code."))
+    db.commit()
+
+    earlier = build_export(db, db_c)["x_tagging"]["earlier_codebooks"]
+    assert {"id": old.id, "name": "older book", "codings": 3} in earlier
+    assert all(e["id"] < new.id for e in earlier)
+    assert [e["id"] for e in earlier] == sorted(e["id"] for e in earlier)
+
+
 def test_export_route_download(codes):
     with TestClient(app) as client:
         r = client.get("/export")

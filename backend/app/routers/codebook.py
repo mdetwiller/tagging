@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_tagging_db
-from ..models import Code, CodeExemplar, Codebook
+from ..models import Code, CodeExemplar, Codebook, Coding
 from ..schemas import CodeEdit
 from ..services.codebook_edit import CodeEditError, CodeNotFound, edit_code, list_revisions
 from ..services.codebook_import import CodebookFormatError, import_reconciled
@@ -78,7 +78,12 @@ def current_codebook(db: Session = Depends(get_tagging_db)) -> dict:
         for parent in codes
         if parent.parent_code_id is None
     ]
-    return {"id": codebook.id, "name": codebook.name, "codes": tree}
+    human_judgments = db.scalar(
+        select(func.count(Coding.id))
+        .join(Code, Code.id == Coding.code_id)
+        .where(Code.codebook_id == codebook.id, Coding.is_ai_generated.is_(False))
+    )
+    return {"id": codebook.id, "name": codebook.name, "codes": tree, "human_judgments": human_judgments or 0}
 
 
 @codes_router.patch("/{code_id}")

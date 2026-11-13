@@ -64,7 +64,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 
 - Import reads Codestormer's reconciled JSON (`{version, last_saved, codes:[...]}` with `children`), never the Cortico export, because only the reconciled file carries exemplar text. A Cortico-shaped file (codes with `parent_id`) is rejected with a message.
 - Each code's exemplars come from that code's own `exemplars` list. Never read exemplars from `merged_from`; it holds whole copies of merged codes, and only their names are kept (in `x_source`).
-- Re-importing creates a new codebook. Older codebooks stay `ACTIVE`; the current one is the newest by id.
+- Re-importing creates a new codebook. Older codebooks stay `ACTIVE`; the current one is the newest by id. Judgments don't carry over, so the setup panel asks for an in-page confirm when the current codebook has any (`human_judgments` from `GET /codebooks/current`), and the export lists older codebooks' coding counts in `x_tagging.earlier_codebooks`.
 
 ## 6. Pointers
 
