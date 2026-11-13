@@ -8,9 +8,12 @@ from sqlalchemy.orm import Session
 
 from ..db import get_tagging_db
 from ..models import Code, CodeExemplar, Codebook
+from ..schemas import CodeEdit
+from ..services.codebook_edit import CodeEditError, CodeNotFound, edit_code, list_revisions
 from ..services.codebook_import import CodebookFormatError, import_reconciled
 
 router = APIRouter(prefix="/codebooks", tags=["codebooks"])
+codes_router = APIRouter(prefix="/codes", tags=["codes"])
 
 
 @router.post("/import")
@@ -76,3 +79,48 @@ def current_codebook(db: Session = Depends(get_tagging_db)) -> dict:
         if parent.parent_code_id is None
     ]
     return {"id": codebook.id, "name": codebook.name, "codes": tree}
+
+
+@codes_router.patch("/{code_id}")
+def patch_code(code_id: int, changes: CodeEdit, db: Session = Depends(get_tagging_db)) -> dict:
+    try:
+        code = edit_code(db, code_id, changes)
+    except CodeNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Code {code_id} not found.") from exc
+    except CodeEditError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    children = list(
+        db.scalars(
+            select(Code)
+            .where(Code.parent_code_id == code.id)
+            .order_by(Code.display_order, Code.id)
+        )
+    )
+    ids = [code.id] + [c.id for c in children]
+    exemplar_counts = dict(
+        db.execute(
+            select(CodeExemplar.code_id, func.count(CodeExemplar.id))
+            .where(CodeExemplar.code_id.in_(ids))
+            .group_by(CodeExemplar.code_id)
+        ).all()
+    )
+    return _serialize_code(
+        code, exemplar_counts, [_serialize_code(c, exemplar_counts, []) for c in children]
+    )
+
+
+@codes_router.get("/{code_id}/revisions")
+def code_revisions(code_id: int, db: Session = Depends(get_tagging_db)) -> list[dict]:
+    try:
+        revisions = list_revisions(db, code_id)
+    except CodeNotFound as exc:
+        raise HTTPException(status_code=404, detail=f"Code {code_id} not found.") from exc
+    return [
+        {
+            "field": r.field,
+            "before": r.before,
+            "after": r.after,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in revisions
+    ]

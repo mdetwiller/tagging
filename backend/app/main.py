@@ -27,6 +27,7 @@ app.add_middleware(
 )
 
 app.include_router(codebook.router)
+app.include_router(codebook.codes_router)
 
 
 @app.get("/health")
