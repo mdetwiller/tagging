@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (101 tests, about 4 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (111 tests, about 4 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
@@ -44,7 +44,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 | Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first. | The revision history goes into the export. |
 | Every AI row has `is_ai_generated=True`, `status="suggested"`, and `ai_metadata` with at least `model`, `run_id`, `question_instructions_hash`. | Only the user files judgments, and every AI row must be traceable to its run and prompt. |
 | Single user: `config.user_id = 101` is used for `created_by`. | There is no auth. |
-| Thresholds (default 0.5) and search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
+| Thresholds (default 0.5) and search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`, `sample_size`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
 | Jev: `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, `Authorization: Bearer $TYPESAFE_API_KEY`, 5 attempts with backoff from 2 s on 429/500/502/503/504 and network errors. No cost warning. | Copied from Codestormer's `call_jev`; the user chose no warning. |
 | Jev's answer is read from `{"c<code_id>": {"type": "noul", "noul": <0..1>}}`. A missing answer is counted in `missing_answers`, never saved as a null probability. | Found in the live probe of 2026-11-13. |
 | Python modules start with `from __future__ import annotations`. | House style. |
@@ -55,9 +55,10 @@ Milestone 1 is complete; milestone 2 (drift proposals) is not started.
 | Call | What it costs | Rule |
 |---|---|---|
 | `POST /embeddings` (OpenAI) | First run about 1.02M tokens, about $0.02; later runs only stale code queries and new highlights | Requires `{"confirm": true}` after the estimate from `GET /embeddings/status` (otherwise 400). Ask the user before triggering it. |
-| `POST /runs` (Jev) | One request per highlight, each asking about every active code (about 4.4k input tokens with 57 codes; a single-code run took 168 requests and 736,054 tokens). No TypeSafe price is recorded. | Ask the user before starting a live run. |
+| `POST /runs` (Jev) | One request per highlight, each asking about every active code (about 4.4k input tokens with 57 codes). With no `code_id` it is a sample run: `search.sample_size` (200) random highlights, about 0.9M input tokens. With `code_id` it is a find-more run for that code: up to 200 requests (one took 168 requests and 736,054 tokens). No TypeSafe price is recorded. | Ask the user before starting a live run. |
 
-- Renaming a code or editing its definition marks its query stale; runs return 409 until it is re-embedded.
+- Renaming a code or editing its definition marks its query stale; a find-more run for it returns 409 until it is re-embedded. A sample run needs no embeddings.
+- A run's kind is `summary["kind"]` (`"sample"` or `"find_more"`), written when the row is created; `scope_code_id` null means sample. Sample runs write no `run_highlight` rows: their highlights are the AI `coding` rows with that `run_id`. Both kinds share `_Judging` in `services/search_run.py`; keep the request, failure and write rules there.
 - Keys are read by name only: `TYPESAFE_API_KEY` from the environment, `Tagging/.env`, then `../Codestormer/.env`; `OPENAI_API_KEY` and `OPENAI_BASE_URL` from the environment, then `../backend/.env`. Never print or open any `.env`; check by variable name only.
 
 ## 5. Codestormer import contract

@@ -47,10 +47,19 @@ each code's tagging prompt improves from those judgments.
 
 - Started from a button. No cost warning for Jev.
 - One Jev request judges one highlight against every active code, as Noul questions.
-- For each code, the run walks that code's candidates (similarity order, with 20% random
-  highlights mixed in) until Jev finds 10 highlights at or above the threshold, or 200 tries.
-  Fewer than 5 positives flags the code "hard to find". Positives found for other codes count
-  toward them. A run covers all codes or one code. Each run's sample is fresh.
+- **Sample run** (the sidebar's "Run sample (N highlights)", `POST /runs` with no `code_id`):
+  draws `search.sample_size` (200) highlights at random, fresh each run, and judges each
+  against every active code. No stop condition and no embeddings needed. A code with fewer
+  than 5 positives in the sample (highlights already human-judged for it don't count) is
+  flagged "few". The run's highlights are its AI coding rows; it writes no `run_highlight`
+  rows. About 4.4k input tokens per request with 57 codes, so a 200-highlight sample is
+  about 0.9M input tokens.
+- **Find more** (a code's review view, `POST /runs` with `code_id`): walks that code's
+  candidates (similarity order, with 20% random highlights mixed in) until Jev finds 10
+  highlights at or above the threshold, or 200 tries. Fewer than 5 positives flags the code
+  "hard to find". It needs current embeddings. Each run's random picks are fresh.
+- The run's kind is stored in its summary (`"kind": "sample" | "find_more"`); a run with no
+  scope code is a sample run. Only one run runs at a time.
 - Candidates are ranked by embedding similarity (`text-embedding-3-small`) between each
   highlight and the code's name, definition and exemplars. Embedding the highlights is a
   one-time paid OpenAI job behind a cost warning (about 1M tokens, about $0.02).
@@ -60,6 +69,11 @@ each code's tagging prompt improves from those judgments.
 
 - Layout A: code list on the left; the selected code's found highlights on the right, then a
   divider and the random-sample highlights.
+- A code's review combines the latest sample run that covered it with every find-more run for
+  it. Each highlight is listed once: Found (latest AI probability at or above the threshold,
+  or final yes), else Random (the sample's other highlights and find-more random picks), else
+  Below threshold (find-more similarity picks). Each row shows its source: sample, search or
+  random (sample wins).
 - Every row has its own accept and reject; checkboxes plus a bulk bar accept or reject many.
 - Bulk actions: Apply Code, Remove Code, Update Status, Mark Not Done, accept/reject
   suggestions, rename/move codes. No Assign.

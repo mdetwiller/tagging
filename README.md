@@ -44,14 +44,20 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
    (`text-embedding-3-small`, about 1.02M tokens, about $0.02) behind an estimate and a
    confirm step (`POST /embeddings` needs `{"confirm": true}`). Later runs of the job embed
    only highlights without a vector and stale code queries.
-3. Start a run (all codes or one code). Renaming a code or editing its definition makes its
-   query embedding stale, and runs return 409 until you re-embed (cheap, only the stale
-   queries).
-4. Review: accept, reject, or apply codes in bulk, then export one JSON file. A code's review
-   lists "Found" (this run's similarity picks whose AI probability is at or above the code's
-   threshold or whose final tag is yes, then final yeses from elsewhere), a collapsed "Below
-   threshold" section (the run's other similarity picks, including unscored ones), and the
-   random sample.
+3. Run a sample ("Run sample (200 highlights)" in the sidebar): 200 random highlights
+   (`search.sample_size`), each judged against every active code. It needs no embeddings.
+   The code list shows each code's positives out of the sample, with ⚠ when there are fewer
+   than 5.
+4. For a code with few positives, open it and press "Find more for this code": a search in
+   that code's similarity order (every 5th pick random) until 10 positives or 200 tries. It
+   needs current embeddings; renaming a code or editing its definition makes its query stale,
+   and Find more returns 409 until you re-embed (cheap, only the stale queries).
+5. Review: accept, reject, or apply codes in bulk, then export one JSON file. A code's review
+   combines the latest sample with every Find more run for the code, listing each highlight
+   once: "Found" (AI probability at or above the code's threshold, or final yes, then final
+   yeses from elsewhere), the random sample (the sample's other highlights and Find more's
+   random picks), and a collapsed "Below threshold" section (Find more's other similarity
+   picks, including unscored ones). Each row is labelled sample, search or random.
 
 ## Jev cost and behaviour
 
@@ -59,7 +65,9 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
   whole codebook (about 4.4k input tokens with 57 codes). `usage.input_tokens` from each
   response is summed into the run's `tokens_used`.
 - Measured: one single-code run on the real codebook (57 codes) took 168 requests and 736,054
-  input tokens, and found 10 positives.
+  input tokens, and found 10 positives. At about 4,400 input tokens per request, a
+  200-highlight sample run is about 0.9M input tokens (the old per-code search over all 57
+  codes could reach about 11,400 requests).
 - No TypeSafe price is recorded anywhere, and there is deliberately no cost warning for Jev.
 - Retries: 5 attempts in total (`jev.max_attempts`), backoff from 2 s, on 429, 500, 502,
   503, 504 and network errors (`httpx.TransportError`).
@@ -70,7 +78,7 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 101 tests, about 4 s
+cd backend && .venv/bin/python -m pytest -q        # 111 tests, about 4 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 
