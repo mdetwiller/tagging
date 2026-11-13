@@ -61,14 +61,22 @@ export interface EmbedResult {
 
 export type RunState = "running" | "done" | "failed";
 
+/** "sample": random highlights judged against every active code. "find_more": one code's
+ * similarity search. Runs from before the sample run existed have no kind. */
+export type RunKind = "sample" | "find_more";
+
+/** A sample run sets `few`; a find-more run sets `hard_to_find`. Both mean positives below
+ * `hard_to_find_below`. A sample run's `tries` counts highlights Jev answered for the code. */
 export interface RunCodeProgress {
   positives: number;
   tries: number;
-  hard_to_find: boolean;
+  hard_to_find?: boolean;
+  few?: boolean;
 }
 
-/** A failed run may carry only `error`; a run that has not reported yet may be null. */
+/** A failed run may carry only `kind` and `error`; a run that has not reported yet may be null. */
 export interface RunSummary {
+  kind?: RunKind;
   codes?: Record<string, RunCodeProgress>;
   missing_answers?: number;
   /** Requests that still failed after the client's retries; the run skipped those highlights. */
@@ -85,6 +93,13 @@ export interface RunStatus {
   requests: number;
   tokens_used: number;
   summary: RunSummary | null;
+}
+
+/** GET /runs/overview. `find_more` is keyed by code id. */
+export interface RunOverview {
+  sample_size: number;
+  sample: RunStatus | null;
+  find_more: Record<string, RunStatus>;
 }
 
 export interface RunStarted {
@@ -120,17 +135,27 @@ export interface Row {
   human: HumanDecision | null;
   final: boolean | null;
   status: HighlightReviewStatus;
+  /** Where the row came from: the sample run, a find-more similarity pick, or a find-more
+   * random pick (sample wins). Null for a final yes from none of these. */
+  source: RowSource | null;
   other_codes: OtherCodeFinal[];
 }
 
+export type RowSource = "sample" | "search" | "random";
+
 export interface ReviewData {
   code: { id: number; name: string; definition: string; threshold: number; status: CodeStatus };
-  run_id: number | null;
+  /** The latest sample run that covered this code, or null. */
+  sample_run_id: number | null;
+  /** Runs with search picks for this code, newest first. */
+  find_more_run_ids: number[];
   agreement: Agreement;
-  /** This run's similarity picks at or above the threshold or with a final yes, then other final yeses. */
+  /** Highlights from the latest sample or any find-more run at or above the threshold or with
+   * a final yes, then other final yeses. Each highlight is in one section only. */
   found: Row[];
-  /** This run's remaining similarity picks, in run order (including unscored ones). */
+  /** Find-more similarity picks not found, including unscored ones. */
   below_threshold: Row[];
+  /** The latest sample's highlights and find-more random picks that are not found. */
   random: Row[];
 }
 

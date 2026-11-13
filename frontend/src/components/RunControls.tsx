@@ -1,56 +1,33 @@
-import { useEffect, useState } from "react";
-import { api, errorDetail, errorStatus } from "../lib/api";
+import { useState } from "react";
+import { errorDetail } from "../lib/api";
 import type { RunStatus } from "../lib/types";
-
-const POLL_MS = 2000;
 
 interface Props {
   run: RunStatus | null;
-  onRunChange: (run: RunStatus) => void;
-  selectedCodeId: number | null;
-  /** Called when a polled run stops running, so counts and agreement can refresh. */
-  onRunFinished: () => void;
+  /** From GET /runs/overview; null until it loads. */
+  sampleSize: number | null;
+  /** A polling error from the run tracker. */
+  pollError: string | null;
+  onStartSample: () => Promise<void>;
 }
 
-export default function RunControls({ run, onRunChange, selectedCodeId, onRunFinished }: Props) {
+function describe(run: RunStatus): string {
+  const kind = run.summary?.kind;
+  if (kind === "sample") return "sample";
+  if (kind === "find_more" || run.scope_code_id !== null) return `find more, code ${run.scope_code_id}`;
+  return "all codes";
+}
+
+export default function RunControls({ run, sampleSize, pollError, onStartSample }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-
-  useEffect(() => {
-    api.latestRun().then(onRunChange, (err) => {
-      if (errorStatus(err) !== 404) setError(errorDetail(err));
-    });
-  }, [onRunChange]);
-
-  const runId = run?.id;
   const running = run?.status === "running";
-  useEffect(() => {
-    if (runId === undefined || !running) return;
-    let cancelled = false;
-    const timer = setInterval(() => {
-      api.getRun(runId).then(
-        (next) => {
-          if (cancelled) return;
-          onRunChange(next);
-          if (next.status !== "running") onRunFinished();
-        },
-        (err) => {
-          if (!cancelled) setError(errorDetail(err));
-        }
-      );
-    }, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [runId, running, onRunChange, onRunFinished]);
 
-  async function start(codeId?: number) {
+  async function start() {
     setStarting(true);
     setError(null);
     try {
-      const { run_id } = await api.startRun(codeId);
-      onRunChange(await api.getRun(run_id));
+      await onStartSample();
     } catch (err) {
       setError(errorDetail(err));
     } finally {
@@ -61,28 +38,22 @@ export default function RunControls({ run, onRunChange, selectedCodeId, onRunFin
   const codes = run?.summary?.codes ?? {};
   const codeCount = Object.keys(codes).length;
   const positives = Object.values(codes).reduce((sum, c) => sum + c.positives, 0);
-  const hardToFind = Object.values(codes).filter((c) => c.hard_to_find).length;
+  const hardToFind = Object.values(codes).filter((c) => c.few || c.hard_to_find).length;
 
   return (
     <section className="panel runs">
       <h2>Search runs</h2>
       <div className="buttons">
-        <button onClick={() => start()} disabled={starting || running}>
-          Run all codes
-        </button>{" "}
-        <button
-          onClick={() => selectedCodeId !== null && start(selectedCodeId)}
-          disabled={starting || running || selectedCodeId === null}
-        >
-          Run this code
+        <button onClick={start} disabled={starting || running || sampleSize === null}>
+          Run sample{sampleSize !== null && ` (${sampleSize} highlights)`}
         </button>
       </div>
-      {error && <p className="error">{error}</p>}
+      <p className="muted">Judges random highlights against every active code. Use “Find more” in a code’s view to search for one code.</p>
+      {(error || pollError) && <p className="error">{error ?? pollError}</p>}
       {run && (
         <div className="run-status">
           <p>
-            Run {run.id} ({run.scope_code_id === null ? "all codes" : `code ${run.scope_code_id}`}):{" "}
-            <strong className={`run-${run.status}`}>{run.status}</strong>
+            Run {run.id} ({describe(run)}): <strong className={`run-${run.status}`}>{run.status}</strong>
           </p>
           <p className="muted">
             {run.requests.toLocaleString()} requests, {run.tokens_used.toLocaleString()} tokens

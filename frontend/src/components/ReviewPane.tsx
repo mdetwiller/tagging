@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorDetail } from "../lib/api";
-import type { Codebook, CodeOut, ReviewData, Row } from "../lib/types";
+import type { Codebook, CodeOut, ReviewData, Row, RowSource, RunStatus } from "../lib/types";
 import BulkBar from "./BulkBar";
 
 /** Leaving a code's view with at least this many new judgments ends the review session. */
@@ -13,6 +13,10 @@ interface Props {
   activeCodes: CodeOut[];
   /** Bumped when a run finishes, so the review data is refetched. */
   refreshKey: number;
+  /** The newest run, polled by App while it runs. */
+  run: RunStatus | null;
+  /** Starts a find-more run for the code; throws the api error (e.g. a 409). */
+  onFindMore: (codeId: number) => Promise<void>;
   /** Called after any judgment or status change, so the code list can refresh agreement. */
   onChanged: () => void;
   /** Ends a review session: "Done reviewing", or leaving the code after enough new judgments. */
@@ -28,13 +32,30 @@ function formatPercent(p: number | null): string {
   return p === null ? "—" : `${Math.round(p * 100)}%`;
 }
 
+const SOURCE_LABELS: Record<RowSource, { label: string; title: string }> = {
+  sample: { label: "sample", title: "From the latest sample run" },
+  search: { label: "search", title: "A similarity pick from Find more" },
+  random: { label: "random", title: "A random pick from Find more" },
+};
+
 function formatNumber(x: number | null, digits = 2): string {
   return x === null ? "—" : x.toFixed(digits);
 }
 
-export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, onChanged, onSessionEnd }: Props) {
+export default function ReviewPane({
+  codeId,
+  codebook,
+  activeCodes,
+  refreshKey,
+  run,
+  onFindMore,
+  onChanged,
+  onSessionEnd,
+}: Props) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [findMoreError, setFindMoreError] = useState<string | null>(null);
+  const [startingFindMore, setStartingFindMore] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   // Distinct highlights judged for this code (not other codes) since it was opened.
   const [sessionJudged, setSessionJudged] = useState<Set<number>>(new Set());
@@ -99,6 +120,18 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
     setSelected(new Set());
   }
 
+  async function findMore() {
+    setStartingFindMore(true);
+    setFindMoreError(null);
+    try {
+      await onFindMore(codeId);
+    } catch (err) {
+      setFindMoreError(errorDetail(err));
+    } finally {
+      setStartingFindMore(false);
+    }
+  }
+
   function endSession() {
     onSessionEnd(codeId, sessionCount);
     setSessionJudged(new Set());
@@ -128,6 +161,9 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
   if (!data) return <p className="muted">Loading review…</p>;
 
   const a = data.agreement;
+  const anyRunning = run?.status === "running";
+  const findingMore = anyRunning && run?.scope_code_id === codeId;
+  const findMoreCount = data.find_more_run_ids.length;
   const otherCodes = activeCodes.filter((c) => c.id !== codeId);
   const rowProps = { codeId, otherCodes, selected, onToggle: toggle, onJudged: afterChange };
 
@@ -141,7 +177,29 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
             <span title="Highlights with both a human and an AI judgment">
               n={a.n} · match {formatPercent(a.percent_match)} · κ {formatNumber(a.kappa)}
             </span>
-            <span>{data.run_id === null ? "No run yet" : `Run #${data.run_id}`}</span>
+            <span>{data.sample_run_id === null ? "No sample run yet" : `Sample run #${data.sample_run_id}`}</span>
+            {findMoreCount > 0 && (
+              <span title={`Runs ${data.find_more_run_ids.join(", ")}`}>
+                {findMoreCount} find-more run{findMoreCount === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+          <div className="find-more">
+            <button
+              onClick={findMore}
+              disabled={startingFindMore || anyRunning}
+              title={anyRunning && !findingMore ? "Another run is running" : undefined}
+            >
+              Find more for this code
+            </button>
+            {findingMore && run && (
+              <span className="muted">
+                {" "}
+                Finding more… {run.requests} requests
+                {run.summary?.codes?.[String(codeId)] && `, ${run.summary.codes[String(codeId)].positives} positives`}
+              </span>
+            )}
+            {findMoreError && <p className="error">{findMoreError}</p>}
           </div>
         </div>
         <div className="session">
@@ -255,6 +313,11 @@ function HighlightRow({ row, codeId, otherCodes, selected, onToggle, onJudged }:
             Human {row.human === "applied" ? "✓" : row.human === "not_applied" ? "✗" : "—"}
           </span>
           <span>{row.status}</span>
+          {row.source && (
+            <span className={`source source-${row.source}`} title={SOURCE_LABELS[row.source].title}>
+              {SOURCE_LABELS[row.source].label}
+            </span>
+          )}
         </div>
         <p
           className={`hl-text${expanded ? "" : " clamped"}`}

@@ -389,3 +389,25 @@ select {
   background: #b42318;
   color: #fff;
 }
+
+.find-more {
+  margin-top: 8px;
+}
+
+.source {
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: #eaeef2;
+  color: #57606a;
+}
+
+.source-search {
+  background: #ddf4ff;
+  color: #0969da;
+}
+
+.source-random {
+  background: #fff8c5;
+  color: #9a6700;
+}

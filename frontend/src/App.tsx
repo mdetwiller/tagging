@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errorDetail, errorStatus } from "./lib/api";
-import type { Codebook, CodeOut, EmbeddingStatus, RunStatus } from "./lib/types";
+import type { Codebook, CodeOut, EmbeddingStatus, RunOverview } from "./lib/types";
+import { useRun } from "./lib/useRun";
 import SetupPanel from "./components/SetupPanel";
 import RunControls from "./components/RunControls";
 import CodeList from "./components/CodeList";
@@ -25,11 +26,12 @@ export default function App() {
   // undefined while loading; null when no codebook has been imported.
   const [codebook, setCodebook] = useState<Codebook | null | undefined>(undefined);
   const [embedding, setEmbedding] = useState<EmbeddingStatus | null>(null);
-  const [run, setRun] = useState<RunStatus | null>(null);
   const [selectedCodeId, setSelectedCodeId] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runsFinished, setRunsFinished] = useState(0);
   const onRunFinished = useCallback(() => setRunsFinished((n) => n + 1), []);
+  const { run, error: runError, start: startRun } = useRun(onRunFinished);
+  const [overview, setOverview] = useState<RunOverview | null>(null);
   const [judgmentsChanged, setJudgmentsChanged] = useState(0);
   const onJudgmentsChanged = useCallback(() => setJudgmentsChanged((n) => n + 1), []);
 
@@ -61,6 +63,12 @@ export default function App() {
     });
     api.embeddingStatus().then(setEmbedding, (err) => setLoadError(errorDetail(err)));
   }, []);
+
+  useEffect(() => {
+    api.runsOverview().then(setOverview, (err) => setLoadError(errorDetail(err)));
+  }, [runsFinished]);
+
+  const startSample = useCallback(() => startRun(), [startRun]);
 
   const setupIncomplete =
     codebook === null ||
@@ -95,15 +103,16 @@ export default function App() {
         )}
         <RunControls
           run={run}
-          onRunChange={setRun}
-          selectedCodeId={selected ? selected.id : null}
-          onRunFinished={onRunFinished}
+          sampleSize={overview?.sample_size ?? null}
+          pollError={runError}
+          onStartSample={startSample}
         />
         {codebook === undefined && <p className="muted">Loading codebook…</p>}
         {codebook && (
           <CodeList
             codebook={codebook}
             run={run}
+            overview={overview}
             selectedCodeId={selectedCodeId}
             onSelect={setSelectedCodeId}
             onEdited={refreshAll}
@@ -119,6 +128,8 @@ export default function App() {
             codebook={codebook}
             activeCodes={activeCodes}
             refreshKey={runsFinished}
+            run={run}
+            onFindMore={startRun}
             onChanged={onJudgmentsChanged}
             onSessionEnd={handleReviewSessionEnd}
           />

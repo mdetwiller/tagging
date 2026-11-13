@@ -11,6 +11,7 @@ import type {
   ImportResult,
   JudgmentRequest,
   ReviewData,
+  RunOverview,
   RunStarted,
   RunStatus,
 } from "./types";
@@ -77,10 +78,10 @@ export const api = {
       body: JSON.stringify(codeId === undefined ? {} : { code_id: codeId }),
     }),
   latestRun: () => request<RunStatus>("/runs/latest"),
+  runsOverview: () => request<RunOverview>("/runs/overview"),
   getRun: (id: number) => request<RunStatus>(`/runs/${id}`),
 
-  review: (codeId: number, runId?: number) =>
-    request<ReviewData>(`/codes/${codeId}/review${runId === undefined ? "" : `?run_id=${runId}`}`),
+  review: (codeId: number) => request<ReviewData>(`/codes/${codeId}/review`),
   agreement: (codeId: number) => request<Agreement>(`/codes/${codeId}/agreement`),
   judge: (body: JudgmentRequest) =>
     request<{ written: number }>("/judgments", { method: "POST", body: JSON.stringify(body) }),

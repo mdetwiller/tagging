@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { api, errorDetail } from "../lib/api";
-import type { Agreement, Codebook, CodeEdit, CodeOut, RunCodeProgress, RunStatus } from "../lib/types";
+import type { Agreement, Codebook, CodeEdit, CodeOut, RunCodeProgress, RunOverview, RunStatus } from "../lib/types";
 
 interface Props {
   codebook: Codebook;
+  /** The newest run, polled while it runs, so its counts show before the overview refreshes. */
   run: RunStatus | null;
+  overview: RunOverview | null;
   selectedCodeId: number | null;
   onSelect: (id: number) => void;
   onEdited: () => Promise<void>;
@@ -16,7 +18,19 @@ function allCodes(codes: CodeOut[]): CodeOut[] {
   return codes.flatMap((c) => [c, ...c.children]);
 }
 
-export default function CodeList({ codebook, run, selectedCodeId, onSelect, onEdited, agreementKey }: Props) {
+/** The newer of the overview's run and the live run, when the live run qualifies. */
+function newer(saved: RunStatus | null | undefined, live: RunStatus | null, qualifies: boolean): RunStatus | null {
+  if (live && qualifies && (!saved || live.id >= saved.id)) return live;
+  return saved ?? null;
+}
+
+interface CodeProgress {
+  sample: RunCodeProgress | undefined;
+  /** The latest find-more result for the code, only when newer than the latest sample run. */
+  findMore: RunCodeProgress | undefined;
+}
+
+export default function CodeList({ codebook, run, overview, selectedCodeId, onSelect, onEdited, agreementKey }: Props) {
   const [agreements, setAgreements] = useState<Record<number, Agreement>>({});
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
 
@@ -36,7 +50,16 @@ export default function CodeList({ codebook, run, selectedCodeId, onSelect, onEd
     };
   }, [codebook, agreementKey]);
 
-  const progress = run?.summary?.codes ?? {};
+  const sample = newer(overview?.sample, run, run?.summary?.kind === "sample");
+  function progressFor(codeId: number): CodeProgress {
+    const key = String(codeId);
+    const findMore = newer(overview?.find_more[key], run, run?.scope_code_id === codeId);
+    const findMoreNewer = findMore && (!sample || findMore.id > sample.id);
+    return {
+      sample: sample?.summary?.codes?.[key],
+      findMore: findMoreNewer ? findMore.summary?.codes?.[key] : undefined,
+    };
+  }
   const parents = codebook.codes;
 
   function toggle(id: number) {
@@ -51,7 +74,7 @@ export default function CodeList({ codebook, run, selectedCodeId, onSelect, onEd
   const rowProps = (code: CodeOut) => ({
     code,
     parents,
-    progress: progress[String(code.id)],
+    progress: progressFor(code.id),
     agreement: agreements[code.id],
     selected: code.id === selectedCodeId,
     onSelect,
@@ -94,7 +117,7 @@ export default function CodeList({ codebook, run, selectedCodeId, onSelect, onEd
 interface RowProps {
   code: CodeOut;
   parents: CodeOut[];
-  progress: RunCodeProgress | undefined;
+  progress: CodeProgress;
   agreement: Agreement | undefined;
   selected: boolean;
   onSelect: (id: number) => void;
@@ -163,10 +186,22 @@ function CodeRow({ code, parents, progress, agreement, selected, onSelect, onEdi
           {code.name}
         </button>
         <span className="stats">
-          {progress && (
-            <span title="positives / tries in the latest run">
-              {progress.positives}/{progress.tries}
-              {progress.hard_to_find && (
+          {progress.sample && (
+            <span title="Positives / highlights judged in the latest sample run">
+              {progress.sample.positives}/{progress.sample.tries}
+              {progress.sample.few && (
+                <span className="warn" title="Few positives in the sample">
+                  {" "}
+                  ⚠
+                </span>
+              )}
+            </span>
+          )}
+          {progress.findMore && (
+            <span title="Positives / tries in the latest Find more run, newer than the sample">
+              {" "}
+              +{progress.findMore.positives}/{progress.findMore.tries}
+              {progress.findMore.hard_to_find && (
                 <span className="warn" title="Hard to find">
                   {" "}
                   ⚠
