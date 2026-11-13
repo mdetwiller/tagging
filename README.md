@@ -70,7 +70,7 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 94 tests, about 3 s
+cd backend && .venv/bin/python -m pytest -q        # 101 tests, about 4 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

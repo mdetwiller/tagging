@@ -7,7 +7,7 @@ search:
   max_tries_per_code: 200
   target_positives: 10
   hard_to_find_below: 5
-  random_share: 0.2
+  random_share: 0.2  # every round(1/share)-th slot is random, so only shares like 0.2, 0.25 or 0.5 are exact
   jev_concurrency: 4
 
 jev:
