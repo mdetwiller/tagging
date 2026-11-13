@@ -17,21 +17,20 @@
 - Settled with the user on 2026-11-13:
   - A proposal may change the code's **name, definition, threshold, include rules and exclude rules**.
   - Re-scoring with Jev runs **on a button** ("Test with Jev"), never automatically.
-  - The daily OpenAI spend cap is **$5** (`drift.daily_usd_cap: 5`).
+  - The daily OpenAI limit is a **token cap** (`drift.daily_token_cap: 500000`, input plus output tokens), not dollars, because no OpenAI price is recorded.
   - A proposal is drafted **only when the session's code has at least one disagreement**.
 - Disagreement means a highlight whose latest human judgment for the code differs from its latest AI call: AI yes is a probability at or above the code's current threshold.
-- No cost warning for drift's OpenAI call, but it never runs if the configured cost of today's proposals plus this call's estimate would exceed `daily_usd_cap`. "Today" is the local calendar day.
+- No cost warning for drift's OpenAI call, but it never runs if the tokens of today's proposals plus this call's estimate would exceed `daily_token_cap`. "Today" is the local calendar day.
 - No cost warning for Jev.
-- Model ids, effort, prices, the cap and example limits come from a new `drift:` block in `backend/config.yaml`, never hard-coded:
+- Model ids, effort, the token cap and example limits come from a new `drift:` block in `backend/config.yaml`, never hard-coded:
   - `model: gpt-5.6-luna` and `reasoning_effort: low`, the same as Notes in the Margin's `ai_review`.
-  - `daily_usd_cap: 5`.
-  - `usd_per_million_input` and `usd_per_million_output`, which **the user supplies**. Until both are set, `POST /codes/{id}/drift` returns 409 "Set drift prices in config.yaml".
+  - `daily_token_cap: 500000`.
   - `max_judged_examples: 40`.
 - The OpenAI key is read only via `config.openai_api_key()` and `config.openai_base_url()`. Never print or open any `.env`.
 - Tests never call the network. OpenAI and Jev are faked.
 - Rows in `code_rules`, `drift_proposal` and `proposal_score` are never deleted. Rollback and dismissal are status changes plus new rows.
 - No new or changed column on any existing table. Only new tables (checked against `../db/schema.sql` names: `code_rules`, `drift_proposal` and `proposal_score` don't collide).
-- Every OpenAI-made proposal stores `ai_metadata` with `model`, `reasoning_effort`, `prompt`, `input_tokens`, `output_tokens` and `usd`.
+- Every OpenAI-made proposal stores `ai_metadata` with `model`, `reasoning_effort`, `prompt`, `input_tokens` and `output_tokens`.
 - Every value the model returns is validated before it is saved:
   - A threshold must be within [0, 1].
   - A name must be non-empty and must not duplicate another active code name in the codebook.
@@ -46,7 +45,7 @@
 2. **Rolling back after the user hand-edited the code since accepting.** It must return 409 and name the field that changed, never silently overwrite their edit. Test it in Task 5.
 3. **Leakage in "Test with Jev".** The highlight being scored must not appear among the prompt's examples, or both scores are inflated. Test it in Task 4 by asserting the scored text is absent from both questions' instructions.
 4. **Proposals over a rename or move.** A proposal drafted before the user renamed the code is stale. Accepting it returns 409 when any field it changes no longer matches its stored `base`. Test it in Task 5.
-5. **The cap at the boundary.** Today's spend $4.99 plus an estimate of $0.02 is refused with 409 and no call. Proposals from yesterday don't count. Test it in Task 3 with an injected clock.
+5. **The cap at the boundary.** Today's 495,000 tokens plus an estimate of 6,000 is refused with 409 and no call. Proposals from yesterday don't count. Test it in Task 3 with an injected clock.
 
 ---
 
@@ -60,7 +59,7 @@
 **Interfaces:**
 - Produces the tables:
   - `code_rules(id, code_id FK, include JSON list[str], exclude JSON list[str], source str "proposal"|"rollback"|"user", proposal_id int|null, created_at)`. The current rules are the newest row; with no row, both lists are empty.
-  - `drift_proposal(id, code_id FK, status str "suggested"|"accepted"|"dismissed"|"rolled_back"|"no_change"|"failed", base JSON, proposed JSON, applied JSON|null, rationale text, disagreements JSON list[int], session_judgments int, ai_metadata JSON, usd float, score_status str "none"|"running"|"done"|"failed", score_summary JSON|null, created_at, decided_at)`.
+  - `drift_proposal(id, code_id FK, status str "suggested"|"accepted"|"dismissed"|"rolled_back"|"no_change"|"failed", base JSON, proposed JSON, applied JSON|null, rationale text, disagreements JSON list[int], session_judgments int, ai_metadata JSON, tokens int, score_status str "none"|"running"|"done"|"failed", score_summary JSON|null, created_at, decided_at)`.
     - `base` and `proposed` share the shape `{name, definition, threshold, include, exclude}`. `proposed` holds only the fields that change.
   - `proposal_score(id, proposal_id FK, highlight_id, human str "applied"|"not_applied", current_p float|null, proposed_p float|null, created_at)`.
 - Produces `rules.current_rules(db, code_id) -> tuple[list[str], list[str]]`.
@@ -74,7 +73,7 @@
   - `build_instructions` with rules contains `"Counts when:\n- <rule>"` and `"Does not count when:\n- <rule>"`. Without rules, the output is byte-identical to today's (so existing instruction hashes don't change).
   - `code_instructions(..., exclude_highlight=h)` leaves out h's text even when h is the newest accepted highlight.
 - [ ] Run `cd backend && .venv/bin/python -m pytest tests/test_rules.py -q`. It is expected to FAIL.
-- [ ] Implement the models, `DriftConfig` and the `drift:` block (values in Global Constraints, prices `null`), then `rules.py`, the `build_instructions` and `code_instructions` changes, and an export addition: `x_tagging.codes[].rules` (current) and `x_tagging.codes[].rules_history`.
+- [ ] Implement the models, `DriftConfig` and the `drift:` block (values in Global Constraints), then `rules.py`, the `build_instructions` and `code_instructions` changes, and an export addition: `x_tagging.codes[].rules` (current) and `x_tagging.codes[].rules_history`.
 - [ ] Add a "Drift proposals" section to `plan/design.md` recording the four decisions in Global Constraints.
 - [ ] Run the full suite: `.venv/bin/python -m pytest -q`. Expected: all pass (126 plus the new ones).
 - [ ] Commit: `git commit -m "Add versioned code rules and show them to Jev"`
@@ -108,7 +107,7 @@
 - `drift.draft(db, code_id, session_judgments, client, now=None) -> DriftProposal`.
 - Route `POST /codes/{id}/drift` with body `{session_judgments: int}` returns `{status: "no_disagreement"}` or a serialized proposal.
 - `GET /codes/{id}/proposals` returns the newest first, each with its scores summary.
-- `GET /drift/spend` returns `{today_usd, cap_usd, prices_set}`.
+- `GET /drift/spend` returns `{today_tokens, cap_tokens}`.
 
 The model's output schema is `{name: str|null, definition: str|null, threshold: number|null, include: [str], exclude: [str], rationale: str}`. Null or an unchanged value means no change.
 
@@ -120,19 +119,17 @@ The prompt carries:
 
 Order of checks in `draft`:
 1. The code is not found or retired: 404 or 409.
-2. Prices are unset: 409.
-3. An existing `suggested` proposal for the code: return it, with no call.
-4. `disagreements()` is empty: return `{status: "no_disagreement"}`, with no call and no row.
-5. Estimate the cost as (prompt chars / 4) input tokens + 1,000 output tokens at the configured prices. If today's `usd` plus the estimate exceeds the cap: 409 "Daily drift cap reached".
-6. Call, validate (Global Constraints), and save. If nothing survives validation, the status is `no_change`. A client exception saves status `failed` with the error in `ai_metadata` and returns 502.
+2. An existing `suggested` proposal for the code: return it, with no call.
+3. `disagreements()` is empty: return `{status: "no_disagreement"}`, with no call and no row.
+4. Estimate the tokens as (prompt chars / 4) input + 1,000 output. If today's `tokens` plus the estimate exceeds the cap: 409 "Daily drift token limit reached".
+5. Call, validate (Global Constraints), and save. If nothing survives validation, the status is `no_change`. A client exception saves status `failed` with the error in `ai_metadata` and returns 502.
 
 - [ ] Tests with a fake client that records calls:
   - no disagreement means no call;
-  - a disagreement produces one call and a `suggested` row with `base` filled and `usd` computed from the fake tokens;
+  - a disagreement produces one call and a `suggested` row with `base` filled and `tokens` = the fake input plus output tokens;
   - a second call returns the same row (Review Focus 1);
   - a threshold of 1.4, a duplicate name and empty rules are dropped, and all-dropped becomes `no_change`;
-  - the cap boundary with an injected `now`, and yesterday not counted (Review Focus 5);
-  - unset prices give 409.
+  - the cap boundary with an injected `now`, and yesterday not counted (Review Focus 5).
 - [ ] Implement it, run the suite, and commit: `git commit -m "Draft drift proposals from review disagreements"`
 
 ### Task 4: "Test with Jev" re-score
@@ -175,7 +172,7 @@ Order of checks in `draft`:
 - `POST /proposals/{id}/rollback` only works on the code's newest `accepted` proposal.
   - Returns 409 naming the field if the code's current value for any applied field differs from `applied` (Review Focus 2).
   - It restores `base` values via `edit_code` and `set_rules(source="rollback")` and sets the status to `rolled_back`.
-- Export adds `x_tagging.codes[].proposals`: id, status, base, proposed, applied, rationale, score_summary and usd.
+- Export adds `x_tagging.codes[].proposals`: id, status, base, proposed, applied, rationale, score_summary and tokens.
 
 - [ ] Tests:
   - accept with parts `["threshold","rules"]` changes only those and writes one `code_revision` and one `code_rules`;
@@ -194,7 +191,7 @@ Order of checks in `draft`:
 - Modify: `frontend/src/App.tsx` (wire `onSessionEnd` to `api.drift`), `frontend/src/components/ReviewPane.tsx`, `frontend/src/components/CodeList.tsx`, `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `frontend/src/index.css`, `CLAUDE.md`, `README.md`
 
 The panel's behaviour:
-- `onSessionEnd(codeId, count)` calls `api.drift(codeId, count)`, fire-and-forget. The result shows in that code's review view, and its error (cap reached, prices unset) shows as one line there.
+- `onSessionEnd(codeId, count)` calls `api.drift(codeId, count)`, fire-and-forget. The result shows in that code's review view, and its error (token limit reached) shows as one line there.
 - The panel sits at the top of the review, under the family notes, when the code has a `suggested` proposal.
   - It shows the rationale and, for each changed part (name, definition, threshold, rules), the current value beside the proposed one, with a checkbox (ticked by default) and an editable field.
   - The "Based on N disagreements" link scrolls to them.
@@ -202,13 +199,13 @@ The panel's behaviour:
   - After a test it shows a before/after table of n, percent match and kappa.
 - "Proposal history" is collapsed. It lists past proposals with their status and has a "Roll back" button on the newest accepted one. Accepting or rolling back refreshes the codebook (the name and threshold may change).
 - CodeList shows a "proposal" marker on codes with a `suggested` proposal.
-- The sidebar shows "Drift spend today: $x of $5".
+- The sidebar shows "Drift tokens today: x of 500,000" (the cap from `GET /drift/spend`).
 
 - [ ] Implement it. `npx tsc -b --noEmit`, `npm run lint` and `npm run build` must be clean.
-- [ ] Update CLAUDE.md (§1 milestone status, §3 rules for the three tables, §4 a drift row: OpenAI, no warning, $5 daily cap, prices from config) and the README.
+- [ ] Update CLAUDE.md (§1 milestone status, §3 rules for the three tables, §4 a drift row: OpenAI, no warning, daily token cap from config) and the README.
 - [ ] Commit: `git commit -m "Show, test and decide drift proposals in the review view"`
 
 ## Verification at the end
 
 - The full backend suite passes, and the frontend typecheck, lint and build are clean.
-- In the browser, with the scratch copy of `db/tagging.db` via `TAGGING_DB_PATH` and fake prices, the panel renders from a seeded proposal. No live OpenAI or Jev call is made without the user's go-ahead.
+- In the browser, with the scratch copy of `db/tagging.db` via `TAGGING_DB_PATH`, the panel renders from a seeded proposal. No live OpenAI or Jev call is made without the user's go-ahead.
