@@ -26,3 +26,16 @@ class RunRequest(BaseModel):
     """Leave `code_id` out to search for every active code of the current codebook."""
 
     code_id: int | None = None
+
+
+class JudgmentRequest(BaseModel):
+    """Accept, reject, Apply Code and Remove Code all post here; `applied` is the decision."""
+
+    code_id: int
+    highlight_ids: list[int] = Field(min_length=1)
+    applied: bool
+
+
+class HighlightStatusRequest(BaseModel):
+    highlight_ids: list[int] = Field(min_length=1)
+    status: Literal["not_started", "in_progress", "completed"]
