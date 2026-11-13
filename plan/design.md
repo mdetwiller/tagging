@@ -112,7 +112,29 @@ Settled with the user on 2026-11-13:
   highlight whose latest human judgment differs from its latest AI call at the code's
   threshold).
 
-Model, effort, cap and example limit come from the `drift:` block in `backend/config.yaml`.
+Model, effort, cap, example limit and the OpenAI timeout (`timeout_seconds: 120`) come from
+the `drift:` block in `backend/config.yaml`.
+
+Behaviour added in the final fix round:
+
+- A suggested proposal reports `stale_parts` (computed when serialized, not stored): the parts
+  whose live value no longer matches `base`. The panel marks them "changed since drafted",
+  and accepting them is refused (409).
+- A threshold-only proposal is scored with one Jev question per highlight; its probability
+  is compared with the current threshold for "before" and the proposed one for "after".
+- Rolling back is refused (409) while any proposal of the code is being scored, and scoring
+  is refused for a retired code.
+- The export carries each proposal's model, effort, input and output tokens, disagreements
+  and session judgments, but not the prompt.
+
+Known limitations:
+
+- Rules change only through proposals; there is no hand edit of rules yet. The model cannot
+  propose clearing a list (an empty list means "unchanged"), but the researcher can clear one
+  when accepting.
+- Dismissing a proposal while the same disagreement remains means the next session end
+  drafts again; only the daily token cap bounds this.
+- Every code's proposals are fetched on page load (one request per code).
 
 ## Milestones
 

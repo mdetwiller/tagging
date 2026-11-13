@@ -68,6 +68,12 @@ class DriftClient(Protocol):
         ...
 
 
+def client_options() -> dict:
+    """OpenAI client settings other than the key."""
+    config = get_config()
+    return {"base_url": config.openai_base_url() or None, "timeout": config.drift.timeout_seconds}
+
+
 class OpenAIDriftClient:
     """Paid. Never construct this in tests."""
 
@@ -78,9 +84,7 @@ class OpenAIDriftClient:
             raise RuntimeError("OPENAI_API_KEY is not set in the environment or backend/.env.")
         from openai import OpenAI
 
-        self._client = OpenAI(
-            api_key=api_key, base_url=config.openai_base_url() or None, timeout=config.drift.timeout_seconds
-        )
+        self._client = OpenAI(api_key=api_key, **client_options())
         self._model = config.drift.model
         self._effort = config.drift.reasoning_effort
 

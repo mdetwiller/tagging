@@ -90,7 +90,7 @@ restored when the note is reopened. The export carries the current non-empty not
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 193 tests, about 5 s
+cd backend && .venv/bin/python -m pytest -q        # 199 tests, about 5 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 
@@ -133,11 +133,15 @@ shows the proposal under the family notes:
   editable field. Rules are edited one per line; a list may be cleared.
 - "Test with Jev" scores the proposal against every highlight you judged for the code (one
   Jev request per highlight, no cost warning; 409 while a search run is running) and shows
-  n, percent match and kappa for the current and the proposed question.
+  n, percent match and kappa for the current and the proposed question. A threshold-only
+  proposal asks one question per highlight and compares it with both thresholds.
+- A part changed on the code since the draft is marked "changed since drafted", with a
+  warning that accepting it will be refused; dismiss and end a new session to redraft.
 - "Accept selected" applies the ticked parts (your edits win) through the same code edits
   as the code list, so a name or definition change makes the code's query stale until you
   re-embed. "Dismiss" closes the proposal.
 
 "Proposal history" (collapsed) lists earlier proposals with their status. The newest
-accepted one has "Roll back", which restores the code's values from before it, unless a
-field it changed has been edited since (409).
+accepted one has "Roll back", whose confirm lists each part it restores. It is refused (409)
+when a field it changed has been edited since, or while a proposal of the code is being
+scored. Each OpenAI call times out after `drift.timeout_seconds` (120).
