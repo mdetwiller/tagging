@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, errorDetail, errorStatus } from "./lib/api";
-import type { Codebook, CodeOut, EmbeddingStatus, RunOverview } from "./lib/types";
+import type { Codebook, CodeOut, DriftSpend, EmbeddingStatus, Proposal, RunOverview } from "./lib/types";
 import { useRun } from "./lib/useRun";
 import SetupPanel from "./components/SetupPanel";
 import RunControls from "./components/RunControls";
 import CodeList from "./components/CodeList";
 import ReviewPane from "./components/ReviewPane";
+import type { DriftState } from "./components/ProposalPanel";
 
 function findCode(codes: CodeOut[], id: number | null): CodeOut | null {
   if (id === null) return null;
@@ -15,11 +16,6 @@ function findCode(codes: CodeOut[], id: number | null): CodeOut | null {
     if (child) return child;
   }
   return null;
-}
-
-/** Ends a review session. Milestone 1 only logs; milestone 2 attaches the drift check here. */
-function handleReviewSessionEnd(codeId: number, judgments: number) {
-  console.log(`Review session ended for code ${codeId}: ${judgments} judgments`);
 }
 
 export default function App() {
@@ -38,6 +34,66 @@ export default function App() {
   const onNoteSaved = useCallback(
     (codeId: number, text: string) => setNoteFlags((prev) => ({ ...prev, [codeId]: text.trim() !== "" })),
     []
+  );
+
+  // Drift proposals by code id, newest first. Only codes whose proposals have been fetched have
+  // an entry; each fetch is numbered so an older response can't overwrite a newer one.
+  const [proposals, setProposals] = useState<Record<number, Proposal[]>>({});
+  const proposalRequests = useRef<Record<number, number>>({});
+  const [driftStates, setDriftStates] = useState<Record<number, DriftState>>({});
+  const drafting = useRef(new Set<number>());
+  const [spend, setSpend] = useState<DriftSpend | null>(null);
+
+  const refreshProposals = useCallback((codeId: number): Promise<void> => {
+    const request = (proposalRequests.current[codeId] ?? 0) + 1;
+    proposalRequests.current[codeId] = request;
+    return api.proposals(codeId).then(
+      (list) => {
+        if (proposalRequests.current[codeId] === request) setProposals((prev) => ({ ...prev, [codeId]: list }));
+      },
+      (err) => setLoadError(errorDetail(err))
+    );
+  }, []);
+
+  const onProposalUpdated = useCallback((proposal: Proposal) => {
+    setProposals((prev) => {
+      const list = prev[proposal.code_id];
+      if (!list) return prev;
+      return { ...prev, [proposal.code_id]: list.map((p) => (p.id === proposal.id ? proposal : p)) };
+    });
+  }, []);
+
+  const refreshSpend = useCallback(() => {
+    api.driftSpend().then(setSpend, (err) => setLoadError(errorDetail(err)));
+  }, []);
+
+  // The drift check: fire-and-forget, at most one in flight per code, so an effect that fires
+  // twice can't draft twice. Its outcome shows in that code's review view.
+  const onSessionEnd = useCallback(
+    (codeId: number, judgments: number) => {
+      if (drafting.current.has(codeId)) return;
+      drafting.current.add(codeId);
+      setDriftStates((prev) => ({ ...prev, [codeId]: { kind: "drafting" } }));
+      const settle = (state: DriftState | null) =>
+        setDriftStates((prev) => {
+          const next = { ...prev };
+          if (state) next[codeId] = state;
+          else delete next[codeId];
+          return next;
+        });
+      api
+        .drift(codeId, judgments)
+        .then(
+          (result) => settle("id" in result && result.status === "no_change" ? { kind: "no_change" } : null),
+          (err) => settle({ kind: "error", message: errorDetail(err) })
+        )
+        .finally(() => {
+          drafting.current.delete(codeId);
+          refreshProposals(codeId);
+          refreshSpend();
+        });
+    },
+    [refreshProposals, refreshSpend]
   );
 
   const refreshCodebook = useCallback(async () => {
@@ -72,6 +128,38 @@ export default function App() {
   useEffect(() => {
     api.runsOverview().then(setOverview, (err) => setLoadError(errorDetail(err)));
   }, [runsFinished]);
+
+  useEffect(() => {
+    refreshSpend();
+  }, [refreshSpend]);
+
+  // Every code's proposals once per set of codes (like the code list's agreement), so the
+  // "proposal" markers show without opening each code; later fetches are per code.
+  const codeIdsKey = useMemo(
+    () => (codebook ? codebook.codes.flatMap((c) => [c, ...c.children]).map((c) => c.id).join(",") : ""),
+    [codebook]
+  );
+  useEffect(() => {
+    if (codeIdsKey === "") return;
+    for (const id of codeIdsKey.split(",").map(Number)) refreshProposals(id);
+  }, [codeIdsKey, refreshProposals]);
+
+  const onProposalDecided = useCallback(
+    async (codeId: number) => {
+      await Promise.all([refreshAll(), refreshProposals(codeId)]);
+    },
+    [refreshAll, refreshProposals]
+  );
+
+  const proposalCodeIds = useMemo(
+    () =>
+      new Set(
+        Object.entries(proposals)
+          .filter(([, list]) => list.some((p) => p.status === "suggested"))
+          .map(([id]) => Number(id))
+      ),
+    [proposals]
+  );
 
   const startSample = useCallback(() => startRun(), [startRun]);
 
@@ -128,6 +216,11 @@ export default function App() {
           pollError={runError}
           onStartSample={startSample}
         />
+        {spend && (
+          <p className="muted drift-spend">
+            Drift tokens today: {spend.today_tokens.toLocaleString()} of {spend.cap_tokens.toLocaleString()}
+          </p>
+        )}
         {codebook === undefined && <p className="muted">Loading codebook…</p>}
         {codebook && (
           <CodeList
@@ -140,6 +233,7 @@ export default function App() {
             agreementKey={runsFinished + judgmentsChanged}
             noteFlags={noteFlags}
             onNoteSaved={onNoteSaved}
+            proposalCodeIds={proposalCodeIds}
           />
         )}
       </aside>
@@ -154,8 +248,13 @@ export default function App() {
             run={run}
             onFindMore={startRun}
             onChanged={onJudgmentsChanged}
-            onSessionEnd={handleReviewSessionEnd}
+            onSessionEnd={onSessionEnd}
             onNoteSaved={onNoteSaved}
+            proposals={proposals[selected.id]}
+            drift={driftStates[selected.id]}
+            onProposalUpdated={onProposalUpdated}
+            onProposalsRefresh={refreshProposals}
+            onProposalDecided={onProposalDecided}
           />
         ) : (
           <p className="placeholder">Select a code</p>

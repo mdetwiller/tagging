@@ -1,9 +1,12 @@
 import type {
+  AcceptProposalRequest,
   Agreement,
   Codebook,
   CodeEdit,
   CodeOut,
   CodeRevision,
+  DriftResult,
+  DriftSpend,
   EmbedResult,
   EmbeddingStatus,
   FamilyNote,
@@ -11,10 +14,12 @@ import type {
   HighlightStatusResult,
   ImportResult,
   JudgmentRequest,
+  Proposal,
   ReviewData,
   RunOverview,
   RunStarted,
   RunStatus,
+  ScoreStarted,
 } from "./types";
 
 // Fixed: the backend's CORS allows only http://localhost:5176, and there is no Vite proxy.
@@ -41,6 +46,7 @@ export function errorDetail(err: unknown): string {
     try {
       const body = JSON.parse(message.slice(brace));
       if (typeof body.detail === "string") return body.detail;
+      if (typeof body.detail?.message === "string") return body.detail.message;
       if (Array.isArray(body.detail)) {
         return body.detail
           .map((d: { loc?: unknown[]; msg?: string }) => `${(d.loc ?? []).slice(1).join(".")}: ${d.msg ?? ""}`)
@@ -98,6 +104,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ highlight_ids: highlightIds, status }),
     }),
+
+  /** Drafts a drift proposal (a paid OpenAI call, capped per day), or returns the open one. */
+  drift: (codeId: number, sessionJudgments: number) =>
+    request<DriftResult>(`/codes/${codeId}/drift`, {
+      method: "POST",
+      body: JSON.stringify({ session_judgments: sessionJudgments }),
+    }),
+  proposals: (codeId: number) => request<Proposal[]>(`/codes/${codeId}/proposals`),
+  driftSpend: () => request<DriftSpend>("/drift/spend"),
+  /** "Test with Jev": starts scoring in the background; poll `proposal(id)`. */
+  scoreProposal: (id: number) => request<ScoreStarted>(`/proposals/${id}/score`, { method: "POST" }),
+  proposal: (id: number) => request<Proposal>(`/proposals/${id}`),
+  acceptProposal: (id: number, body: AcceptProposalRequest) =>
+    request<Proposal>(`/proposals/${id}/accept`, { method: "POST", body: JSON.stringify(body) }),
+  dismissProposal: (id: number) => request<Proposal>(`/proposals/${id}/dismiss`, { method: "POST" }),
+  rollbackProposal: (id: number) => request<Proposal>(`/proposals/${id}/rollback`, { method: "POST" }),
 
   exportUrl: () => `${BASE}/export`,
 };

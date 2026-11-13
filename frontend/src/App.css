@@ -467,3 +467,152 @@ select {
 .family-note[hidden] {
   display: none;
 }
+
+.proposal-marker {
+  margin-left: 6px;
+  margin-right: auto;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: normal;
+  background: #fff8c5;
+  color: #9a6700;
+  align-self: center;
+}
+
+.drift-spend {
+  margin: 0 0 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.proposal {
+  background: #fff;
+  border-color: #d4a72c;
+}
+
+.proposal-rationale {
+  white-space: pre-wrap;
+  margin: 4px 0;
+}
+
+button.link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #0969da;
+  text-decoration: underline;
+}
+
+button.link:disabled {
+  color: #6e7781;
+  text-decoration: none;
+}
+
+.proposal-parts,
+.score-table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.proposal-parts {
+  width: 100%;
+}
+
+.proposal-parts th,
+.proposal-parts td,
+.score-table th,
+.score-table td {
+  border-bottom: 1px solid #d0d7de;
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.part-tick {
+  white-space: nowrap;
+}
+
+.part-current {
+  width: 45%;
+  white-space: pre-wrap;
+  color: #57606a;
+}
+
+.part-proposed {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.part-proposed label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.part-proposed textarea,
+.part-proposed input:not([type="number"]) {
+  width: 100%;
+}
+
+.part-proposed input[type="number"] {
+  width: 90px;
+}
+
+.rule-list {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+  white-space: normal;
+}
+
+.proposal-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.score-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.proposal-history {
+  margin: 8px 0;
+}
+
+.proposal-history summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.proposal-history ul {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+
+.proposal-history-item {
+  padding: 4px 0;
+  border-bottom: 1px solid #eaeef2;
+}
+
+.proposal-status {
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: #eaeef2;
+  color: #57606a;
+}
+
+.proposal-status.status-accepted {
+  background: #dafbe1;
+  color: #1a7f37;
+}
+
+.proposal-status.status-failed {
+  background: #ffebe9;
+  color: #b42318;
+}
+
+.hl-row.disagreement {
+  outline: 2px solid #d4a72c;
+}

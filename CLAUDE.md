@@ -12,7 +12,7 @@ probability per code, and lets the researcher accept, reject and apply codes in 
 per-code agreement and a JSON export. The stack is FastAPI + SQLAlchemy (`backend/`) and
 React 19 + Vite + TypeScript (`frontend/`). Source data is `../acp_pipeline_snapshot.db`
 (read-only); everything the app writes goes to `db/tagging.db` and `data/embeddings/`.
-Milestone 1 is complete; milestone 2 (drift proposals) is in progress on the `milestone-2` branch.
+Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `milestone-2` branch.
 
 ## 2. Development commands
 
@@ -76,8 +76,9 @@ Milestone 1 is complete; milestone 2 (drift proposals) is in progress on the `mi
 |---|---|
 | `plan/design.md` | Before changing behaviour. It is the spec: every settled decision. |
 | `plan/milestone-1-plan.md` | Before structural changes. Global Constraints, Review Focus and the file map. |
+| `plan/milestone-2-plan.md` | Before changing drift proposals: its tasks and Global Constraints. |
 | `README.md` | Setup, first use, measured Jev cost, recorded deviations. |
 | `ai-sensemaking-prototype/` | Cortico reference code. Gitignored; never modify it. |
 
-- **Milestone 2 hook:** the drift check hangs on `onSessionEnd(codeId, count)` in `frontend/src/components/ReviewPane.tsx` (`count` = distinct highlights judged for that code in the session; fires on "Done reviewing" or on leaving after `SESSION_END_MIN_JUDGMENTS = 5`).
+- **Drift check:** `onSessionEnd(codeId, count)` from `frontend/src/components/ReviewPane.tsx` (`count` = distinct highlights judged for that code in the session; fires on "Done reviewing" or on leaving after `SESSION_END_MIN_JUDGMENTS = 5`) calls `api.drift` in `App.tsx`, fire-and-forget with at most one request in flight per code. Proposals live in App state per code; the review shows them in `components/ProposalPanel.tsx`.
 - **Git:** there is no remote. Commit on a branch, never push.

@@ -185,3 +185,88 @@ export interface HighlightStatusResult {
   updated: number;
   status: HighlightReviewStatus;
 }
+
+/** A code's editable values as a drift proposal sees them. */
+export interface CodeValues {
+  name: string;
+  definition: string;
+  threshold: number;
+  include: string[];
+  exclude: string[];
+}
+
+export type ProposalStatus = "suggested" | "accepted" | "dismissed" | "rolled_back" | "no_change" | "failed";
+export type ScoreStatus = "none" | "running" | "done" | "failed";
+/** `rules` covers both the include and the exclude list. */
+export type ProposalPart = "name" | "definition" | "threshold" | "rules";
+
+/** "Test with Jev": agreement under the current question (`before`) and the proposed one
+ * (`after`). A failed score may carry only `error`. */
+export interface ProposalScoreSummary {
+  before?: Agreement;
+  after?: Agreement;
+  missing_answers?: number;
+  failed_requests?: number;
+  error?: string;
+}
+
+/** The values an accept wrote, plus its code_revision ids; a rollback adds its own ids. */
+export interface ProposalApplied extends Partial<CodeValues> {
+  edited?: boolean;
+  revision_ids?: number[];
+  rollback_revision_ids?: number[];
+}
+
+export interface ProposalAIMetadata {
+  model: string;
+  reasoning_effort: string;
+  prompt: string;
+  input_tokens: number;
+  output_tokens: number;
+  /** Set on a failed draft. */
+  error?: string;
+}
+
+/** POST /codes/{id}/drift, GET /codes/{id}/proposals (newest first), GET /proposals/{id}, and
+ * the accept, dismiss and rollback routes. */
+export interface Proposal {
+  id: number;
+  code_id: number;
+  status: ProposalStatus;
+  /** The code's values when the proposal was drafted. */
+  base: CodeValues;
+  /** Only the fields that change. */
+  proposed: Partial<CodeValues>;
+  applied: ProposalApplied | null;
+  rationale: string;
+  /** Highlight ids whose latest human and AI calls differed when drafted. */
+  disagreements: number[];
+  session_judgments: number;
+  ai_metadata: ProposalAIMetadata | null;
+  tokens: number;
+  score_status: ScoreStatus;
+  score_summary: ProposalScoreSummary | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** POST /codes/{id}/drift: the drafted (or already open) proposal, or no disagreement. */
+export type DriftResult = Proposal | { status: "no_disagreement" };
+
+/** GET /drift/spend: tokens of today's (local day) proposals and the daily cap. */
+export interface DriftSpend {
+  today_tokens: number;
+  cap_tokens: number;
+}
+
+/** POST /proposals/{id}/score (202). */
+export interface ScoreStarted {
+  proposal_id: number;
+  score_status: "running";
+}
+
+/** POST /proposals/{id}/accept. `values` may name only fields of the chosen parts. */
+export interface AcceptProposalRequest {
+  parts: ProposalPart[];
+  values?: Partial<CodeValues>;
+}

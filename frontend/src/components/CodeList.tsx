@@ -17,6 +17,8 @@ interface Props {
   /** Notes saved this page load, by parent code id: true when not empty. Overrides `has_note`. */
   noteFlags: Record<number, boolean>;
   onNoteSaved: (codeId: number, text: string) => void;
+  /** Codes with an open (`suggested`) drift proposal, among those whose proposals are loaded. */
+  proposalCodeIds: Set<number>;
 }
 
 function allCodes(codes: CodeOut[]): CodeOut[] {
@@ -45,6 +47,7 @@ export default function CodeList({
   agreementKey,
   noteFlags,
   onNoteSaved,
+  proposalCodeIds,
 }: Props) {
   const [agreements, setAgreements] = useState<Record<number, Agreement>>({});
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -105,6 +108,7 @@ export default function CodeList({
     progress: progressFor(code.id),
     agreement: agreements[code.id],
     selected: code.id === selectedCodeId,
+    hasProposal: proposalCodeIds.has(code.id),
     onSelect,
     onEdited,
   });
@@ -167,13 +171,14 @@ interface RowProps {
   progress: CodeProgress;
   agreement: Agreement | undefined;
   selected: boolean;
+  hasProposal: boolean;
   onSelect: (id: number) => void;
   onEdited: () => Promise<void>;
 }
 
 const TOP_LEVEL = "top";
 
-function CodeRow({ code, parents, progress, agreement, selected, onSelect, onEdited }: RowProps) {
+function CodeRow({ code, parents, progress, agreement, selected, hasProposal, onSelect, onEdited }: RowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(code.name);
   const [definition, setDefinition] = useState(code.definition);
@@ -232,6 +237,11 @@ function CodeRow({ code, parents, progress, agreement, selected, onSelect, onEdi
         <button className="code-name" onClick={() => onSelect(code.id)} title={code.definition}>
           {code.name}
         </button>
+        {hasProposal && (
+          <span className="proposal-marker" title="Has a drift proposal to review">
+            proposal
+          </span>
+        )}
         <span className="stats">
           {progress.sample && (
             <span title="Positives / highlights judged in the current sample run">

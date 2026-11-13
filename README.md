@@ -1,7 +1,8 @@
 # Tagging prototype
 
 Applies Codestormer's reconciled codebook to Cortico highlights: Jev proposes tags, the
-researcher judges them in bulk. Design: `plan/design.md`. Plan: `plan/milestone-1-plan.md`.
+researcher judges them in bulk. Design: `plan/design.md`. Plans: `plan/milestone-1-plan.md`,
+`plan/milestone-2-plan.md`.
 
 The Cortico snapshot `../acp_pipeline_snapshot.db` is opened read-only. Everything this app
 writes goes to `db/tagging.db` (override with `TAGGING_DB_PATH`) and `data/embeddings/`
@@ -89,7 +90,7 @@ restored when the note is reopened. The export carries the current non-empty not
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 126 tests, about 4 s
+cd backend && .venv/bin/python -m pytest -q        # 193 tests, about 5 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 
@@ -111,9 +112,32 @@ are no frontend tests.
 - Re-importing a codebook leaves older codebooks `ACTIVE`; the current codebook is the newest
   by id.
 
-## Milestone 2 hook
+## Drift proposals
 
-The drift check hangs on `onSessionEnd(codeId, count)` in
-`frontend/src/components/ReviewPane.tsx`, where `count` is the number of distinct highlights
-judged for that code in the session. A session ends on "Done reviewing", or on leaving the
-code's view after at least 5 new judgments.
+When a code's review session ends ("Done reviewing", or leaving the code's view after at
+least 5 new judgments), the page asks for a drift proposal (`POST /codes/{id}/drift`). If
+the code has at least one disagreement (a highlight whose latest human judgment differs from
+its latest AI call at the current threshold) and no open proposal, this is one paid OpenAI
+call (`drift.model` in `backend/config.yaml`) with no cost warning. It is refused when
+today's proposal tokens plus the estimate would exceed `drift.daily_token_cap` (500,000);
+the sidebar shows "Drift tokens today: x of 500,000", and a refusal shows as one line in the
+code's review.
+
+A code with an open (`suggested`) proposal is marked "proposal" in the code list. Its review
+shows the proposal under the family notes:
+
+- The rationale, and "Based on N disagreements", which outlines those highlights in the
+  review and scrolls to the first one.
+- Each changed part (name, definition, threshold, and the include/exclude rules as one part)
+  with its current value beside the proposed one, a checkbox (ticked by default) and an
+  editable field. Rules are edited one per line; a list may be cleared.
+- "Test with Jev" scores the proposal against every highlight you judged for the code (one
+  Jev request per highlight, no cost warning; 409 while a search run is running) and shows
+  n, percent match and kappa for the current and the proposed question.
+- "Accept selected" applies the ticked parts (your edits win) through the same code edits
+  as the code list, so a name or definition change makes the code's query stale until you
+  re-embed. "Dismiss" closes the proposal.
+
+"Proposal history" (collapsed) lists earlier proposals with their status. The newest
+accepted one has "Roll back", which restores the code's values from before it, unless a
+field it changed has been edited since (409).

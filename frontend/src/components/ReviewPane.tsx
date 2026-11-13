@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorDetail } from "../lib/api";
-import type { Codebook, CodeOut, ReviewData, Row, RowSource, RunStatus } from "../lib/types";
+import type { Codebook, CodeOut, Proposal, ReviewData, Row, RowSource, RunStatus } from "../lib/types";
 import BulkBar from "./BulkBar";
 import FamilyNote from "./FamilyNote";
+import ProposalPanel, { type DriftState } from "./ProposalPanel";
 
 /** Leaving a code's view with at least this many new judgments ends the review session. */
 export const SESSION_END_MIN_JUDGMENTS = 5;
@@ -23,6 +24,14 @@ interface Props {
   /** Ends a review session: "Done reviewing", or leaving the code after enough new judgments. */
   onSessionEnd: (codeId: number, judgments: number) => void;
   onNoteSaved: (codeId: number, text: string) => void;
+  /** This code's proposals, newest first; undefined until loaded. */
+  proposals: Proposal[] | undefined;
+  /** The drift check from this code's latest session end, if any. */
+  drift: DriftState | undefined;
+  onProposalUpdated: (proposal: Proposal) => void;
+  onProposalsRefresh: (codeId: number) => Promise<void>;
+  /** After accept or rollback, which may change the code's name, definition and threshold. */
+  onProposalDecided: (codeId: number) => Promise<void>;
 }
 
 export interface Judged {
@@ -54,6 +63,11 @@ export default function ReviewPane({
   onChanged,
   onSessionEnd,
   onNoteSaved,
+  proposals,
+  drift,
+  onProposalUpdated,
+  onProposalsRefresh,
+  onProposalDecided,
 }: Props) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +80,17 @@ export default function ReviewPane({
   const [noteOpen, setNoteOpen] = useState(false);
   // The note stays mounted once opened, so a save still in flight when collapsed can report.
   const [noteMounted, setNoteMounted] = useState(false);
+  const [belowOpen, setBelowOpen] = useState(false);
+  // A proposal's disagreements, outlined after "Based on N disagreements" is clicked.
+  const [flagged, setFlagged] = useState<Set<number>>(new Set());
+  // A new object per click, so clicking again scrolls again.
+  const [scrollTarget, setScrollTarget] = useState<{ id: number } | null>(null);
+  const [flagMessage, setFlagMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (scrollTarget === null) return;
+    document.getElementById(`hl-${scrollTarget.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [scrollTarget]);
 
   // App remounts this component per code (key={codeId}), so unmounting means leaving the code.
   const sessionRef = useRef({ codeId, count: 0, onSessionEnd });
@@ -138,6 +163,21 @@ export default function ReviewPane({
     }
   }
 
+  function showDisagreements(ids: number[]) {
+    setFlagged(new Set(ids));
+    const wanted = new Set(ids);
+    const shown = data ? [...data.found, ...data.below_threshold, ...data.random] : [];
+    const first = shown.find((r) => wanted.has(r.highlight_id));
+    if (!first) {
+      setFlagMessage("None of these highlights are in this review.");
+      return;
+    }
+    const inView = shown.filter((r) => wanted.has(r.highlight_id)).length;
+    setFlagMessage(inView < ids.length ? `${inView} of ${ids.length} disagreements are in this review.` : null);
+    if (data?.below_threshold.some((r) => wanted.has(r.highlight_id))) setBelowOpen(true);
+    setScrollTarget({ id: first.highlight_id });
+  }
+
   function endSession() {
     onSessionEnd(codeId, sessionCount);
     setSessionJudged(new Set());
@@ -171,7 +211,7 @@ export default function ReviewPane({
   const findingMore = anyRunning && run?.scope_code_id === codeId;
   const findMoreCount = data.find_more_run_ids.length;
   const otherCodes = activeCodes.filter((c) => c.id !== codeId);
-  const rowProps = { codeId, otherCodes, selected, onToggle: toggle, onJudged: afterChange };
+  const rowProps = { codeId, otherCodes, selected, flagged, onToggle: toggle, onJudged: afterChange };
   const family = codebook.codes.find((p) => p.id === codeId || p.children.some((c) => c.id === codeId));
 
   return (
@@ -237,6 +277,15 @@ export default function ReviewPane({
           )}
         </details>
       )}
+      <ProposalPanel
+        proposals={proposals}
+        drift={drift}
+        onUpdated={onProposalUpdated}
+        onRefresh={() => onProposalsRefresh(codeId)}
+        onDecided={() => onProposalDecided(codeId)}
+        onShowDisagreements={showDisagreements}
+      />
+      {flagMessage && <p className="muted">{flagMessage}</p>}
       {selected.size > 0 && (
         <BulkBar
           codeId={codeId}
@@ -248,7 +297,7 @@ export default function ReviewPane({
       )}
       <RowList title="Found" rows={data.found} empty="Nothing found yet." onToggleAll={toggleAll} {...rowProps} />
       {data.below_threshold.length > 0 && (
-        <details className="below-threshold">
+        <details className="below-threshold" open={belowOpen} onToggle={(e) => setBelowOpen(e.currentTarget.open)}>
           <summary>Below threshold ({data.below_threshold.length})</summary>
           <RowList title="Below threshold" rows={data.below_threshold} empty="" onToggleAll={toggleAll} {...rowProps} />
         </details>
@@ -266,6 +315,7 @@ interface RowListProps {
   codeId: number;
   otherCodes: CodeOut[];
   selected: Set<number>;
+  flagged: Set<number>;
   onToggle: (id: number) => void;
   onToggleAll: (rows: Row[], on: boolean) => void;
   onJudged: (judged: Judged) => Promise<void>;
@@ -294,11 +344,12 @@ interface HighlightRowProps {
   codeId: number;
   otherCodes: CodeOut[];
   selected: Set<number>;
+  flagged: Set<number>;
   onToggle: (id: number) => void;
   onJudged: (judged: Judged) => Promise<void>;
 }
 
-function HighlightRow({ row, codeId, otherCodes, selected, onToggle, onJudged }: HighlightRowProps) {
+function HighlightRow({ row, codeId, otherCodes, selected, flagged, onToggle, onJudged }: HighlightRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -324,7 +375,10 @@ function HighlightRow({ row, codeId, otherCodes, selected, onToggle, onJudged }:
   const finalClass = row.final === true ? " final-yes" : row.final === false ? " final-no" : "";
 
   return (
-    <li className={`hl-row${finalClass}`}>
+    <li
+      id={`hl-${row.highlight_id}`}
+      className={`hl-row${finalClass}${flagged.has(row.highlight_id) ? " disagreement" : ""}`}
+    >
       <input
         type="checkbox"
         checked={selected.has(row.highlight_id)}
