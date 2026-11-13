@@ -248,11 +248,13 @@ def test_review_splits_found_and_random(client, db, codes, highlights):
     body = client.get(f"/codes/{a}/review").json()
     assert body["code"]["id"] == a
     assert body["run_id"] == run
-    assert [r["highlight_id"] for r in body["found"]] == [h[0], h[1], h[15]]
+    # h[1] scored 0.2 and was rejected, so it is below the threshold, not found.
+    assert [r["highlight_id"] for r in body["found"]] == [h[0], h[15]]
+    assert [r["highlight_id"] for r in body["below_threshold"]] == [h[1]]
     assert [r["highlight_id"] for r in body["random"]] == [h[2]]
     assert body["agreement"]["n"] == 1
 
-    first, second = body["found"][0], body["found"][1]
+    first, second = body["found"][0], body["below_threshold"][0]
     with CorticoSession() as s:
         hl = s.get(Highlight, h[0])
         project_id = s.get(Conversation, hl.conversation_id).project_id
@@ -268,8 +270,32 @@ def test_review_splits_found_and_random(client, db, codes, highlights):
 
     older = client.get(f"/codes/{a}/review", params={"run_id": old_run}).json()
     # h[0] is a final yes (AI 0.9) from the newer run, so it comes before h[15], which no run listed.
-    assert [r["highlight_id"] for r in older["found"]] == [h[10], h[0], h[15]]
+    assert [r["highlight_id"] for r in older["found"]] == [h[0], h[15]]
+    assert [r["highlight_id"] for r in older["below_threshold"]] == [h[10]]
     assert [r["highlight_id"] for r in older["random"]] == [h[11]]
+
+
+def test_review_below_threshold(client, db, codes, highlights):
+    a = codes["A"]
+    h = [x[0] for x in highlights]
+    run = _run_rows(db, a, [
+        (h[0], "similarity"), (h[1], "similarity"), (h[2], "similarity"),
+        (h[3], "similarity"), (h[4], "random"),
+    ])
+    _ai(db, a, highlights[0], 0.3, run)
+    _ai(db, a, highlights[1], 0.3, run)
+    judgments.judge(db, a, [h[1]], True)
+    _ai(db, a, highlights[2], 0.7, run)
+    judgments.judge(db, a, [h[2]], False)
+    # h[3] has no AI row. h[4] is a random pick the user accepted.
+    _ai(db, a, highlights[4], 0.1, run)
+    judgments.judge(db, a, [h[4]], True)
+
+    body = client.get(f"/codes/{a}/review").json()
+    assert [r["highlight_id"] for r in body["found"]] == [h[1], h[2]]
+    assert [r["highlight_id"] for r in body["below_threshold"]] == [h[0], h[3]]
+    assert [r["highlight_id"] for r in body["random"]] == [h[4]]
+    assert body["found"][1]["final"] is False
 
 
 def test_review_hides_retired_code_from_other_codes(client, db, codes, highlights):
@@ -279,14 +305,14 @@ def test_review_hides_retired_code_from_other_codes(client, db, codes, highlight
     judgments.judge(db, b, [h], True)
     judgments.judge(db, r_code, [h], True)
     body = client.get(f"/codes/{a}/review").json()
-    others = body["found"][0]["other_codes"]
+    others = body["below_threshold"][0]["other_codes"]
     assert {o["code_id"] for o in others} == {b, codes["C"]}
     assert next(o for o in others if o["code_id"] == b)["final"] is True
 
 
 def test_review_without_runs_and_unknown_code(client, codes):
     body = client.get(f"/codes/{codes['C']}/review").json()
-    assert (body["run_id"], body["found"], body["random"]) == (None, [], [])
+    assert (body["run_id"], body["found"], body["below_threshold"], body["random"]) == (None, [], [], [])
     assert client.get("/codes/999999/review").status_code == 404
 
 

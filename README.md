@@ -44,7 +44,11 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
 3. Start a run (all codes or one code). Renaming a code or editing its definition makes its
    query embedding stale, and runs return 409 until you re-embed (cheap, only the stale
    queries).
-4. Review: accept, reject, or apply codes in bulk, then export one JSON file.
+4. Review: accept, reject, or apply codes in bulk, then export one JSON file. A code's review
+   lists "Found" (this run's similarity picks whose AI probability is at or above the code's
+   threshold or whose final tag is yes, then final yeses from elsewhere), a collapsed "Below
+   threshold" section (the run's other similarity picks, including unscored ones), and the
+   random sample.
 
 ## Jev cost and behaviour
 

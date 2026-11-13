@@ -62,7 +62,7 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
         if (request !== requestRef.current) return;
         setData(d);
         setError(null);
-        const shown = new Set([...d.found, ...d.random].map((r) => r.highlight_id));
+        const shown = new Set([...d.found, ...d.below_threshold, ...d.random].map((r) => r.highlight_id));
         setSelected((prev) => {
           const kept = [...prev].filter((id) => shown.has(id));
           return kept.length === prev.size ? prev : new Set(kept);
@@ -162,6 +162,12 @@ export default function ReviewPane({ codeId, codebook, activeCodes, refreshKey, 
         />
       )}
       <RowList title="Found" rows={data.found} empty="Nothing found yet." onToggleAll={toggleAll} {...rowProps} />
+      {data.below_threshold.length > 0 && (
+        <details className="below-threshold">
+          <summary>Below threshold ({data.below_threshold.length})</summary>
+          <RowList title="Below threshold" rows={data.below_threshold} empty="" onToggleAll={toggleAll} {...rowProps} />
+        </details>
+      )}
       <div className="divider">Random sample</div>
       <RowList title="Random sample" rows={data.random} empty="No random sample." onToggleAll={toggleAll} {...rowProps} />
     </div>

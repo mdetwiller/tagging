@@ -182,9 +182,17 @@ def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) 
     random_ids = list(dict.fromkeys(h for h, by in run_rows if by == "random"))
 
     this_code = latest_by_pair(db, [code_id])
+
+    def is_found(h: int) -> bool:
+        latest = this_code.get((code_id, h), Latest())
+        ai_yes = latest.ai_probability is not None and latest.ai_probability >= code.threshold
+        return ai_yes or latest.final(code.threshold) is True
+
+    found_similar = [h for h in similar if is_found(h)]
+    below_ids = [h for h in similar if not is_found(h)]
     final_yes = [h for (_, h), latest in this_code.items() if latest.final(code.threshold) is True]
-    similar_set = set(similar)
-    extra = [h for h in final_yes if h not in similar_set]
+    in_run = set(similar) | set(random_ids)
+    extra = [h for h in final_yes if h not in in_run]
     # Extra final-yes highlights: newest run that listed them first, then newest judgment.
     last_run = dict(
         db.execute(
@@ -196,9 +204,9 @@ def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) 
     extra.sort(
         key=lambda h: (-(last_run.get(h) or 0), -max(this_code[(code_id, h)].human_id, this_code[(code_id, h)].ai_id))
     )
-    found_ids = similar + extra
+    found_ids = found_similar + extra
 
-    listed = list(dict.fromkeys(found_ids + random_ids))
+    listed = list(dict.fromkeys(found_ids + below_ids + random_ids))
     others = [c for c in embeddings.current_active_codes(db) if c.id != code_id]
     other_latest = latest_by_pair(db, [c.id for c in others], listed) if others and listed else {}
     texts = {
@@ -245,5 +253,6 @@ def review(db: Session, db_c: Session, code_id: int, run_id: int | None = None) 
         "run_id": run_id,
         "agreement": agreement(db, code_id),
         "found": [row(h) for h in found_ids],
+        "below_threshold": [row(h) for h in below_ids],
         "random": [row(h) for h in random_ids],
     }

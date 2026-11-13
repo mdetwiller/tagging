@@ -123,7 +123,10 @@ export interface ReviewData {
   code: { id: number; name: string; definition: string; threshold: number; status: CodeStatus };
   run_id: number | null;
   agreement: Agreement;
+  /** This run's similarity picks at or above the threshold or with a final yes, then other final yeses. */
   found: Row[];
+  /** This run's remaining similarity picks, in run order (including unscored ones). */
+  below_threshold: Row[];
   random: Row[];
 }
 
