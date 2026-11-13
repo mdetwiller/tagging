@@ -34,8 +34,10 @@ cd backend && .venv/bin/python -m pytest -q
 ```
 
 Tests need no network and no keys. They read the real snapshot (read-only) and write to a
-temporary tagging database that `tests/conftest.py` sets with `setdefault`, so never export
-`TAGGING_DB_PATH` pointing at the real `db/tagging.db`.
+temporary tagging database and embeddings directory that `tests/conftest.py` sets with
+`setdefault`, so never export `TAGGING_DB_PATH` or `TAGGING_EMBEDDINGS_DIR` pointing at the
+real `db/tagging.db` or `data/embeddings/`. Embedding tests use a fake client; `POST
+/embeddings` (paid OpenAI call) needs `{"confirm": true}`.
 
 ## Recorded deviations
 

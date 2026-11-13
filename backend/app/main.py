@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import models  # noqa: F401  registers tables on Base
 from .db import Base, tagging_engine
-from .routers import codebook
+from .routers import codebook, embeddings
 
 
 @asynccontextmanager
@@ -28,6 +28,7 @@ app.add_middleware(
 
 app.include_router(codebook.router)
 app.include_router(codebook.codes_router)
+app.include_router(embeddings.router)
 
 
 @app.get("/health")
