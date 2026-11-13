@@ -1,0 +1,227 @@
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #1f2328;
+  background: #fafafa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.3rem;
+  margin: 0 0 12px;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 0 0 8px;
+}
+
+h3 {
+  font-size: 0.95rem;
+  margin: 8px 0 4px;
+}
+
+button {
+  font: inherit;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 440px;
+  flex-shrink: 0;
+  padding: 16px;
+  border-right: 1px solid #d0d7de;
+  background: #fff;
+  overflow-y: auto;
+  max-height: 100vh;
+  position: sticky;
+  top: 0;
+}
+
+.main {
+  flex: 1;
+  padding: 24px;
+}
+
+.placeholder {
+  color: #6e7781;
+  font-size: 1.1rem;
+}
+
+.panel {
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.setup {
+  background: #fff8e5;
+}
+
+.muted {
+  color: #6e7781;
+}
+
+.error {
+  color: #b42318;
+  margin: 4px 0;
+}
+
+.ok {
+  color: #1a7f37;
+  margin: 4px 0;
+}
+
+.warn {
+  color: #9a6700;
+}
+
+.warnings {
+  margin: 4px 0;
+  padding-left: 18px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.confirm {
+  border: 1px solid #d4a72c;
+  background: #fff;
+  padding: 8px;
+  margin-top: 6px;
+  border-radius: 4px;
+}
+
+.run-running {
+  color: #0969da;
+}
+
+.run-done {
+  color: #1a7f37;
+}
+
+.run-failed {
+  color: #b42318;
+}
+
+.code-tree,
+.children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.children {
+  padding-left: 28px;
+}
+
+.parent-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.parent-line > .code-row {
+  flex: 1;
+  font-weight: 600;
+}
+
+.toggle {
+  border: none;
+  background: none;
+  width: 20px;
+  padding: 2px 0;
+}
+
+.code-row {
+  padding: 4px 6px;
+  border-radius: 4px;
+  margin: 2px 0;
+}
+
+.code-row.selected {
+  background: #ddf4ff;
+}
+
+.code-row.retired {
+  color: #8c959f;
+}
+
+.code-row.retired .code-name {
+  color: #8c959f;
+  text-decoration: line-through;
+}
+
+.code-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.code-name {
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-weight: inherit;
+  color: #0969da;
+}
+
+.stats {
+  white-space: nowrap;
+  color: #57606a;
+  font-weight: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-actions {
+  font-weight: normal;
+  font-size: 0.85rem;
+}
+
+.code-actions button {
+  font-size: 0.85rem;
+  padding: 0 6px;
+}
+
+.code-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  font-weight: normal;
+}
+
+.code-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.code-editor input[type="number"] {
+  width: 90px;
+}
