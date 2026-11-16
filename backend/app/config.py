@@ -73,6 +73,7 @@ class DriftConfig(BaseModel):
     daily_token_cap: int
     max_judged_examples: int
     timeout_seconds: float
+    merge_rules: bool = True
 
 
 class Config(BaseModel):

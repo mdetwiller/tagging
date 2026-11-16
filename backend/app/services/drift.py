@@ -40,6 +40,17 @@ OUTPUT_SCHEMA: dict = {
 }
 
 
+MERGE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "include": {"type": ["string", "null"]},
+        "exclude": {"type": ["string", "null"]},
+    },
+    "required": ["include", "exclude"],
+    "additionalProperties": False,
+}
+
+
 class CodeRetired(ValueError):
     pass
 
@@ -267,6 +278,66 @@ def _validate(db: Session, code: Code, base: dict, output: dict) -> dict:
     return proposed
 
 
+def _lists_to_merge(proposed: dict) -> dict[str, list[str]]:
+    return {f: proposed[f] for f in ("include", "exclude") if len(proposed.get(f) or []) > 1}
+
+
+def build_merge_prompt(code: Code, lists: dict[str, list[str]]) -> str:
+    def block(field: str) -> list[str]:
+        items = lists.get(field)
+        if not items:
+            return [f"{field.capitalize()} rules: (none; return null)"]
+        return [f"{field.capitalize()} rules:"] + [f"- {r}" for r in items]
+
+    return "\n".join(
+        [
+            f'These are proposed rules for the qualitative code "{code.name}" ({code.definition}).',
+            "Merge the include rules into one sentence, and the exclude rules into one sentence.",
+            "Keep every condition each rule states; don't add, drop, narrow or broaden any of them.",
+            "Return null for a list marked (none).",
+            "",
+            *block("include"),
+            "",
+            *block("exclude"),
+        ]
+    )
+
+
+def _merge_rules(
+    db: Session, code: Code, base: dict, proposed: dict, client: DriftClient, spent: int, now: datetime | None
+) -> tuple[dict, dict | None, int, int]:
+    """Second pass: each proposed rules list with more than one rule becomes one line. Returns the
+    proposed dict, the merge record for ai_metadata (None when no pass ran), and its tokens. On any
+    failure, or if the pass would pass the daily cap, the lists stay unmerged."""
+    lists = _lists_to_merge(proposed)
+    if not lists or not get_config().drift.merge_rules:
+        return proposed, None, 0, 0
+    prompt = build_merge_prompt(code, lists)
+    record: dict = {"prompt": prompt, "unmerged": lists}
+    if today_tokens(db, now) + spent + estimate_tokens(prompt) > get_config().drift.daily_token_cap:
+        record["skipped"] = "Daily drift token limit reached"
+        return proposed, record, 0, 0
+    try:
+        output, used_in, used_out = client.propose(prompt, MERGE_SCHEMA)
+    except Exception as exc:  # noqa: BLE001  the unmerged proposal is still usable
+        used_in = int(getattr(exc, "input_tokens", 0) or 0)
+        used_out = int(getattr(exc, "output_tokens", 0) or 0)
+        record.update(error=f"{type(exc).__name__}: {exc}", input_tokens=used_in, output_tokens=used_out)
+        return proposed, record, used_in, used_out
+    record.update(input_tokens=int(used_in), output_tokens=int(used_out))
+    merged = dict(proposed)
+    for field in lists:
+        line = output.get(field) if isinstance(output, dict) else None
+        if not (isinstance(line, str) and line.strip()):
+            record.setdefault("kept_unmerged", []).append(field)
+            continue
+        if [line.strip()] == base[field]:
+            merged.pop(field)
+        else:
+            merged[field] = [line.strip()]
+    return merged, record, int(used_in), int(used_out)
+
+
 def _suggested(db: Session, code_id: int) -> DriftProposal | None:
     return db.scalars(
         select(DriftProposal)
@@ -324,12 +395,18 @@ def draft(
         raise DraftFailed(proposal, str(exc)) from exc
 
     proposed = _validate(db, code, base, output if isinstance(output, dict) else {})
+    proposed, merge, merge_in, merge_out = _merge_rules(
+        db, code, base, proposed, client, int(input_tokens) + int(output_tokens), now
+    )
     rationale = output.get("rationale") if isinstance(output, dict) else None
     proposal.status = "suggested" if proposed else "no_change"
     proposal.proposed = proposed
     proposal.rationale = rationale.strip() if isinstance(rationale, str) else ""
-    proposal.tokens = int(input_tokens) + int(output_tokens)
-    proposal.ai_metadata = {**metadata, "input_tokens": int(input_tokens), "output_tokens": int(output_tokens)}
+    total_in, total_out = int(input_tokens) + merge_in, int(output_tokens) + merge_out
+    proposal.tokens = total_in + total_out
+    proposal.ai_metadata = {**metadata, "input_tokens": total_in, "output_tokens": total_out}
+    if merge is not None:
+        proposal.ai_metadata["merge"] = merge
     db.add(proposal)
     db.commit()
     db.refresh(proposal)

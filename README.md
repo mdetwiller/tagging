@@ -90,7 +90,7 @@ restored when the note is reopened. The export carries the current non-empty not
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 199 tests, about 5 s
+cd backend && .venv/bin/python -m pytest -q        # 206 tests, about 5 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 
@@ -145,3 +145,7 @@ shows the proposal under the family notes:
 accepted one has "Roll back", whose confirm lists each part it restores. It is refused (409)
 when a field it changed has been edited since, or while a proposal of the code is being
 scored. Each OpenAI call times out after `drift.timeout_seconds` (120).
+
+When the drafted include or exclude rules have more than one line, a second OpenAI call merges
+each list into a single line before the proposal is shown (`drift.merge_rules`, on by
+default). If that call fails, you see the unmerged rules instead.

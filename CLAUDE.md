@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `mi
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (199 tests, about 5 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (206 tests, about 5 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
@@ -44,7 +44,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `mi
 | Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first. | The revision history goes into the export. |
 | Every AI row has `is_ai_generated=True`, `status="suggested"`, and `ai_metadata` with at least `model`, `run_id`, `question_instructions_hash`. | Only the user files judgments, and every AI row must be traceable to its run and prompt. |
 | Single user: `config.user_id = 101` is used for `created_by`. | There is no auth. |
-| Thresholds (default 0.5), search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`, `sample_size`) and drift settings (`model`, `reasoning_effort`, `daily_token_cap`, `max_judged_examples`, `timeout_seconds`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
+| Thresholds (default 0.5), search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`, `sample_size`) and drift settings (`model`, `reasoning_effort`, `daily_token_cap`, `max_judged_examples`, `timeout_seconds`, `merge_rules`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
 | Jev: `POST https://api.typesafe.ai/v1/systemone`, model `jev-latest`, `Authorization: Bearer $TYPESAFE_API_KEY`, 5 attempts with backoff from 2 s on 429/500/502/503/504 and network errors. No cost warning. | Copied from Codestormer's `call_jev`; the user chose no warning. |
 | Jev's answer is read from `{"c<code_id>": {"type": "noul", "noul": <0..1>}}`. A missing answer is counted in `missing_answers`, never saved as a null probability. | Found in the live probe of 2026-11-13. |
 | Python modules start with `from __future__ import annotations`. | House style. |
@@ -56,7 +56,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `mi
 |---|---|---|
 | `POST /embeddings` (OpenAI) | First run about 1.02M tokens, about $0.02; later runs only stale code queries and new highlights | Requires `{"confirm": true}` after the estimate from `GET /embeddings/status` (otherwise 400). Ask the user before triggering it. |
 | `POST /runs` (Jev) | One request per highlight, each asking about every active code (about 4.4k input tokens with 57 codes). With no `code_id` it is a sample run: `search.sample_size` (200) random highlights, about 0.9M input tokens. With `code_id` it is a find-more run for that code: up to 200 requests (one took 168 requests and 736,054 tokens). No TypeSafe price is recorded. | Ask the user before starting a live run. |
-| `POST /codes/{id}/drift` (OpenAI) | One `drift.model` call per proposal, drafted only when the code has a disagreement and no open `suggested` proposal. Refused with 409 when today's (local day) proposal tokens plus the estimate (prompt chars / 4 + 1,000) exceed `drift.daily_token_cap`. | Ask the user before triggering a live draft. Tests use a fake client; never construct `OpenAIDriftClient` in a test. |
+| `POST /codes/{id}/drift` (OpenAI) | One `drift.model` call per proposal, plus a second call that merges each multi-rule include or exclude list into one line (`drift.merge_rules`; skipped if it would pass the cap), drafted only when the code has a disagreement and no open `suggested` proposal. Refused with 409 when today's (local day) proposal tokens plus the estimate (prompt chars / 4 + 1,000) exceed `drift.daily_token_cap`. | Ask the user before triggering a live draft. Tests use a fake client; never construct `OpenAIDriftClient` in a test. |
 | `POST /proposals/{id}/score` (Jev, "Test with Jev") | One request per highlight whose latest human judgment for the proposal's code is applied or not_applied, each with two questions (`cur`, `new`), or only `cur` when the proposal changes just the threshold. Writes `proposal_score` rows, never `coding`. Only a `suggested` proposal of an active code (409 otherwise). | Ask the user before starting a live score. |
 
 - Renaming a code or editing its definition marks its query stale; a find-more run for it returns 409 until it is re-embedded. A sample run needs no embeddings.

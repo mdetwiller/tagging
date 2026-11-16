@@ -111,9 +111,15 @@ Settled with the user on 2026-11-13:
 - A proposal is drafted **only when the session's code has at least one disagreement** (a
   highlight whose latest human judgment differs from its latest AI call at the code's
   threshold).
+- A **merge pass** (added 2026-11-16 at the user's request): when the drafted include or
+  exclude list has more than one rule, a second OpenAI call merges that list into one line,
+  keeping every condition. A list with one rule is left alone. The second call counts toward
+  the daily cap and is skipped if it would pass it; if it fails or returns a blank line, the
+  unmerged list is kept. The original lists and the second call's prompt and tokens are in
+  `ai_metadata.merge`. `drift.merge_rules: false` turns it off.
 
-Model, effort, cap, example limit and the OpenAI timeout (`timeout_seconds: 120`) come from
-the `drift:` block in `backend/config.yaml`.
+Model, effort, cap, example limit, the OpenAI timeout (`timeout_seconds: 120`) and
+`merge_rules` come from the `drift:` block in `backend/config.yaml`.
 
 Behaviour added in the final fix round:
 

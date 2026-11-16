@@ -172,7 +172,8 @@ def test_invalid_values_are_dropped(db, codes, highlights):
     assert p.tokens == 1500
 
 
-def test_validation_keeps_valid_fields_and_caps_rules(db, codes, highlights):
+def test_validation_keeps_valid_fields_and_caps_rules(db, codes, highlights, monkeypatch):
+    monkeypatch.setattr(get_config().drift, "merge_rules", False)
     a = codes["A"]
     _disagree(db, a, highlights)
     fake = FakeDriftClient(
@@ -356,3 +357,113 @@ def test_openai_client_uses_configured_timeout(monkeypatch):
     assert config.drift.timeout_seconds == 120
     monkeypatch.setattr(config.drift, "timeout_seconds", 42.0)
     assert drift.client_options()["timeout"] == 42.0
+
+
+class ScriptedDriftClient(FakeDriftClient):
+    """Returns `outputs` in order, one per call."""
+
+    def __init__(self, outputs: list, input_tokens: int = 1200, output_tokens: int = 300):
+        super().__init__(input_tokens=input_tokens, output_tokens=output_tokens)
+        self.outputs = list(outputs)
+
+    def propose(self, prompt: str, schema: dict) -> tuple[dict, int, int]:
+        self.calls.append((prompt, schema))
+        out = self.outputs.pop(0)
+        if isinstance(out, Exception):
+            raise out
+        return dict(out), self.input_tokens, self.output_tokens
+
+
+def _first(include: list[str], exclude: list[str]) -> dict:
+    return {"name": None, "definition": None, "threshold": None, "include": include, "exclude": exclude, "rationale": "r"}
+
+
+def test_merge_pass_makes_each_rules_list_one_line(db, codes, highlights):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    fake = ScriptedDriftClient([
+        _first(["Names an official", "Describes being ignored"], ["Only about family", "Only about work"]),
+        {"include": "Names an official and describes being ignored.", "exclude": "Only about family or work."},
+    ])
+    p = drift.draft(db, a, 5, fake)
+    assert len(fake.calls) == 2
+    prompt, schema = fake.calls[1]
+    assert schema is drift.MERGE_SCHEMA
+    assert "- Describes being ignored" in prompt and "- Only about work" in prompt
+    assert p.status == "suggested"
+    assert p.proposed == {
+        "include": ["Names an official and describes being ignored."], "exclude": ["Only about family or work."],
+    }
+    assert p.tokens == 2 * (1200 + 300)
+    assert p.ai_metadata["input_tokens"] == 2400 and p.ai_metadata["output_tokens"] == 600
+    assert p.ai_metadata["merge"]["unmerged"]["include"] == ["Names an official", "Describes being ignored"]
+
+
+def test_merge_pass_skips_single_rule_lists(db, codes, highlights):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    fake = ScriptedDriftClient([_first(["Names an official"], [])])
+    p = drift.draft(db, a, 5, fake)
+    assert len(fake.calls) == 1
+    assert p.proposed == {"include": ["Names an official"]}
+    assert "merge" not in p.ai_metadata
+
+
+def test_merge_pass_only_merges_multi_rule_lists(db, codes, highlights):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    fake = ScriptedDriftClient([
+        _first(["One", "Two"], ["Only exclude"]),
+        {"include": "One and two.", "exclude": None},
+    ])
+    p = drift.draft(db, a, 5, fake)
+    assert "Exclude rules: (none; return null)" in fake.calls[1][0]
+    assert p.proposed == {"include": ["One and two."], "exclude": ["Only exclude"]}
+
+
+def test_merge_failure_keeps_the_unmerged_proposal(db, codes, highlights):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    fake = ScriptedDriftClient([
+        _first(["One", "Two"], []),
+        drift.DriftCallError("Unparseable model output", 700, 20),
+    ])
+    p = drift.draft(db, a, 5, fake)
+    assert p.status == "suggested"
+    assert p.proposed == {"include": ["One", "Two"]}
+    assert "Unparseable" in p.ai_metadata["merge"]["error"]
+    assert p.tokens == 1200 + 300 + 700 + 20
+
+
+def test_merge_blank_line_keeps_that_list(db, codes, highlights):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    fake = ScriptedDriftClient([_first(["One", "Two"], ["X", "Y"]), {"include": "  ", "exclude": "X or Y."}])
+    p = drift.draft(db, a, 5, fake)
+    assert p.proposed == {"include": ["One", "Two"], "exclude": ["X or Y."]}
+    assert p.ai_metadata["merge"]["kept_unmerged"] == ["include"]
+
+
+def test_merge_pass_respects_the_daily_cap(db, codes, highlights, monkeypatch):
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    prompt = drift.build_prompt(db, db.get(Code, a))
+    # Room for the first call's estimate, but not for its real usage plus the merge pass.
+    monkeypatch.setattr(
+        get_config().drift, "daily_token_cap", drift.today_tokens(db) + drift.estimate_tokens(prompt) + 100
+    )
+    fake = ScriptedDriftClient([_first(["One", "Two"], [])], input_tokens=drift.estimate_tokens(prompt))
+    p = drift.draft(db, a, 5, fake)
+    assert len(fake.calls) == 1
+    assert p.proposed == {"include": ["One", "Two"]}
+    assert p.ai_metadata["merge"]["skipped"] == "Daily drift token limit reached"
+
+
+def test_merge_pass_can_be_turned_off(db, codes, highlights, monkeypatch):
+    monkeypatch.setattr(get_config().drift, "merge_rules", False)
+    a = codes["A"]
+    _disagree(db, a, highlights)
+    fake = ScriptedDriftClient([_first(["One", "Two"], [])])
+    p = drift.draft(db, a, 5, fake)
+    assert len(fake.calls) == 1
+    assert p.proposed == {"include": ["One", "Two"]}
