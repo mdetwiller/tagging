@@ -75,7 +75,7 @@ def star(
         raise _code_404(body.code_id) from exc
     except judgments.UnknownHighlights as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except judgments.FacilitatorTurn as exc:
+    except (judgments.FacilitatorTurn, judgments.StarLimit) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

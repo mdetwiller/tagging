@@ -67,7 +67,8 @@ Two marks on a review row:
   one of Jev's examples. Its judgments are kept. "Undo" appears in its place right after, and
   "Facilitator turns (N)" at the bottom of each review un-marks it later (`POST /facilitator`).
 - ☆ stars the highlight as a good example of the code: it also accepts it, and Jev always sees
-  it as one that fits. Unstarring keeps the accept; rejecting it removes the star
+  it as one that fits. A code holds at most 5 stars (`jev.max_starred_examples`); a sixth is
+  refused until you unstar one. Unstarring keeps the accept; rejecting it removes the star
   (`POST /stars`).
 The export lists each code's `starred_highlight_ids` and the `facilitator_turns`.
 
@@ -100,7 +101,7 @@ restored when the note is reopened. The export carries the current non-empty not
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 215 tests, about 5 s
+cd backend && .venv/bin/python -m pytest -q        # 217 tests, about 5 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

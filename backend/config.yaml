@@ -16,6 +16,7 @@ jev:
   model: jev-latest
   max_attempts: 5
   backoff_start_seconds: 2
+  max_starred_examples: 5  # starred highlights per code; Jev sees them all as examples that fit
   state_note: "A highlight from a recorded small-group community conversation (the American Conversation Project)."
 
 embeddings:

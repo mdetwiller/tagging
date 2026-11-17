@@ -97,7 +97,8 @@ each code's tagging prompt improves from those judgments.
   - **Star** (☆ on a row) is per code. Starring also accepts the highlight (a new applied row,
     unless it is already accepted) and pins it as a "fits" example in the code's Jev
     instructions, after the imported exemplars and not limited by the 10 recent accepts.
-    Unstarring keeps the accept; rejecting a starred highlight unstars it. A facilitator turn
+    At most `jev.max_starred_examples` (5) stars per code, not counting facilitator turns; a
+    sixth returns 409. Unstarring keeps the accept; rejecting a starred highlight unstars it. A facilitator turn
     can't be starred (409), and a star on one is ignored while it is marked.
 
 ## Export

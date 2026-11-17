@@ -644,7 +644,7 @@ function HighlightRow({
           title={
             row.starred
               ? "Starred as a good example; click to unstar (the accept stays)"
-              : "Star as a good example of this code: accepts it, and Jev always sees it as one that fits"
+              : "Star as a good example of this code (up to 5): accepts it, and Jev always sees it as one that fits"
           }
           aria-pressed={row.starred}
         >

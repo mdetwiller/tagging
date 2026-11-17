@@ -244,3 +244,34 @@ def test_export_lists_stars_and_facilitator_turns(client, db, codes, highlights)
     assert x["codes"][str(a)]["starred_highlight_ids"] == [highlights[20][0]]
     assert [t["highlight_id"] for t in x["facilitator_turns"]] == [highlights[21][0]]
     assert x["facilitator_turns"][0]["marked_at"].endswith("+00:00")
+
+
+def test_star_cap_per_code(client, db, codes, highlights, monkeypatch):
+    monkeypatch.setattr(get_config().jev, "max_starred_examples", 2)
+    a, b = codes["A"], codes["B"]
+    for h in highlights[22:24]:
+        assert client.post("/stars", json={"code_id": a, "highlight_id": h[0], "starred": True}).status_code == 200
+    third = highlights[24][0]
+    res = client.post("/stars", json={"code_id": a, "highlight_id": third, "starred": True})
+    assert res.status_code == 409 and "2 starred examples" in res.json()["detail"]
+    db.expire_all()
+    assert _human_rows(db, a, third) == []
+    # Re-starring a starred one and starring for another code are fine.
+    assert client.post("/stars", json={"code_id": a, "highlight_id": highlights[22][0], "starred": True}).status_code == 200
+    assert client.post("/stars", json={"code_id": b, "highlight_id": third, "starred": True}).status_code == 200
+    # A starred facilitator turn doesn't count toward the cap.
+    judgments.set_facilitator(db, [highlights[23][0]], True)
+    assert client.post("/stars", json={"code_id": a, "highlight_id": third, "starred": True}).status_code == 200
+
+
+def test_instructions_use_at_most_the_cap(db, codes, highlights, monkeypatch):
+    a = codes["A"]
+    for h in highlights[25:28]:
+        judgments.star(db, a, h[0], True)
+    monkeypatch.setattr(get_config().jev, "max_starred_examples", 2)
+    texts = {h[0]: h[2] for h in highlights}
+    fits = search_run.code_instructions(db, db.get(Code, a), texts).split("Examples that fit:")[1]
+    starred_lines = [" ".join(h[2].split()[:10]) for h in highlights[25:28]]
+    # The two oldest stars are pinned; the third falls back to an ordinary recent accept.
+    assert starred_lines[0] in fits and starred_lines[1] in fits
+    assert fits.index(starred_lines[1]) < fits.index(starred_lines[2])

@@ -26,6 +26,12 @@ class FacilitatorTurn(ValueError):
         self.highlight_id = highlight_id
 
 
+class StarLimit(ValueError):
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"This code already has {limit} starred examples; unstar one first.")
+        self.limit = limit
+
+
 class UnknownHighlights(LookupError):
     def __init__(self, ids: list[int]) -> None:
         super().__init__(f"Highlights {ids} are not in the snapshot.")
@@ -97,13 +103,19 @@ def _add_human(db: Session, code_id: int, highlight_ids: list[int], conversation
 
 def star(db: Session, code_id: int, highlight_id: int, starred: bool, db_c: Session | None = None) -> dict:
     """Stars or unstars a highlight for a code. Starring also accepts it (a new applied row,
-    unless its latest human row for the code is already applied); unstarring keeps the accept."""
+    unless its latest human row for the code is already applied); unstarring keeps the accept.
+    A code holds at most jev.max_starred_examples stars, not counting facilitator turns."""
     if db.get(Code, code_id) is None:
         raise CodeNotFound(code_id)
     conversations = _with_cortico(db_c, lambda s: _conversations(s, [highlight_id]))
     if starred:
-        if highlight_id in marks.facilitator_ids(db):
+        facilitator = marks.facilitator_ids(db)
+        if highlight_id in facilitator:
             raise FacilitatorTurn(highlight_id)
+        counted = [h for h in marks.starred_ids(db, code_id) if h not in facilitator and h != highlight_id]
+        limit = get_config().jev.max_starred_examples
+        if highlight_id not in marks.starred_ids(db, code_id) and len(counted) >= limit:
+            raise StarLimit(limit)
         latest = latest_by_pair(db, [code_id], [highlight_id]).get((code_id, highlight_id))
         if latest is None or latest.human != "applied":
             _add_human(db, code_id, [highlight_id], conversations, True)

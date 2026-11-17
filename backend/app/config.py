@@ -52,6 +52,7 @@ class JevConfig(BaseModel):
     max_attempts: int
     backoff_start_seconds: float
     state_note: str
+    max_starred_examples: int = 5
 
 
 class EmbeddingConfig(BaseModel):

@@ -103,6 +103,8 @@ def code_instructions(
     starred_ids = [
         h for h in marks.starred_ids(db_t, code.id) if h != exclude_highlight and h not in facilitator and h in texts
     ]
+    # Oldest stars first, so lowering the config limit keeps the earliest ones.
+    starred_ids = starred_ids[: get_config().jev.max_starred_examples]
     starred = [texts[h] for h in starred_ids]
     accepted, rejected = _human_examples(db_t, code.id, texts, exclude_highlight, skip=set(starred_ids))
     include, exclude = rules.current_rules(db_t, code.id)
