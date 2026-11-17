@@ -47,10 +47,21 @@ each code's tagging prompt improves from those judgments.
 
 - Started from a button. No cost warning for Jev.
 - One Jev request judges one highlight against every active code, as Noul questions.
-- For each code, the run walks that code's candidates (similarity order, with 20% random
-  highlights mixed in) until Jev finds 10 highlights at or above the threshold, or 200 tries.
-  Fewer than 5 positives flags the code "hard to find". Positives found for other codes count
-  toward them. A run covers all codes or one code. Each run's sample is fresh.
+- **Sample run** (the sidebar's "Run sample (N highlights)", `POST /runs` with no `code_id`):
+  draws `search.sample_size` (200) highlights at random, fresh each run, and judges each
+  against every active code. No stop condition and no embeddings needed. A code with fewer
+  than 5 positives in the sample (highlights already human-judged for it don't count) is
+  flagged "few". The run's highlights are its AI coding rows; it writes no `run_highlight`
+  rows. About 4.4k input tokens per request with 57 codes, so a 200-highlight sample is
+  about 0.9M input tokens.
+- **Find more** (a code's review view, `POST /runs` with `code_id`): walks that code's
+  candidates (similarity order, with 20% random highlights mixed in) until Jev finds 10
+  highlights at or above the threshold, or 200 tries. Fewer than 5 positives flags the code
+  "hard to find". It needs current embeddings. Each run's random picks are fresh.
+- The run's kind is stored in its summary (`"kind": "sample" | "find_more"`), and a sample
+  run is one whose kind is `"sample"`. Older all-codes runs (no scope code, no kind) are not
+  samples; their per-code picks count as find-more rows. Only one run runs at a time.
+- A code's current sample is the newest sample run that is not running and has at least one answered highlight for that code; the review and the code list both use it, and a running sample shows only in the run status.
 - Candidates are ranked by embedding similarity (`text-embedding-3-small`) between each
   highlight and the code's name, definition and exemplars. Embedding the highlights is a
   one-time paid OpenAI job behind a cost warning (about 1M tokens, about $0.02).
@@ -60,6 +71,12 @@ each code's tagging prompt improves from those judgments.
 
 - Layout A: code list on the left; the selected code's found highlights on the right, then a
   divider and the random-sample highlights.
+- A code's review combines its current sample with every find-more run for it. Each
+  highlight is listed once: Found (latest AI probability at or above the threshold, or final
+  yes), else Random (the sample's other highlights scored for this code, and find-more random
+  picks), else
+  Below threshold (find-more similarity picks). Each row shows its source: sample, search or
+  random (sample wins).
 - Every row has its own accept and reject; checkboxes plus a bulk bar accept or reject many.
 - Bulk actions: Apply Code, Remove Code, Update Status, Mark Not Done, accept/reject
   suggestions, rename/move codes. No Assign.
@@ -69,18 +86,82 @@ each code's tagging prompt improves from those judgments.
   Cohen's kappa over highlights with both judgments.
 - A review session ends on "Done reviewing", or on leaving the code's view after at least 5
   new judgments. (Milestone 2 hangs the drift check on this.)
+- Highlight marks (table `highlight_mark`, append-only; the newest row per kind, highlight and
+  code is current):
+  - **Facilitator turn** ("Facilitator" on a row) applies to every code. The highlight leaves
+    every code's review, sample runs, Find more, agreement, drift disagreements and judged
+    examples, "Test with Jev", and Jev's human examples. Its judgments are kept and ignored. The
+    row is replaced by "#id marked as a facilitator turn. Undo" until the code is left, and each
+    review lists all facilitator turns in a collapsed "Facilitator turns (N)" with "Not a
+    facilitator turn".
+  - **Star** (☆ on a row) is per code. Starring also accepts the highlight (a new applied row,
+    unless it is already accepted) and pins it as a "fits" example in the code's Jev
+    instructions, after the imported exemplars and not limited by the 10 recent accepts.
+    At most `jev.max_starred_examples` (5) stars per code, not counting facilitator turns; a
+    sixth returns 409. Unstarring keeps the accept; rejecting a starred highlight unstars it. A facilitator turn
+    can't be starred (409), and a star on one is ignored while it is marked.
 
 ## Export
 
 One JSON file: `codebook.codes[]` (`id, name, description, parent_id, code_type`),
 `codings[]` (every human and AI judgment, with `final`), and an `x_tagging` block (each
-code's instructions, threshold, revision history and agreement).
+code's instructions, threshold, revision history, agreement, current include/exclude `rules`
+and `rules_history`, plus `family_notes`: each parent code's current non-empty "possibly
+missing codes" note), each code's `starred_highlight_ids`, and `facilitator_turns`
+(`highlight_id`, `marked_at`).
+
+## Drift proposals
+
+Settled with the user on 2026-11-13:
+
+- A proposal may change a code's **name, definition, threshold, include rules ("Counts
+  when") and exclude rules ("Does not count when")**. Rules live in the append-only
+  `code_rules` table (the newest row is current; no row means no rules), because adding a
+  column to `code` is off-limits. Jev's instructions list them after the definition, and a
+  code with no rules gets byte-identical instructions to before.
+- Re-scoring with Jev runs **only on a button** ("Test with Jev"), never automatically.
+- OpenAI use is limited by a **daily token cap** (`drift.daily_token_cap: 500000`, input
+  plus output tokens, local calendar day), not dollars, because no OpenAI price is recorded.
+  A call is refused when today's proposal tokens plus its estimate would exceed the cap.
+- A proposal is drafted **only when the session's code has at least one disagreement** (a
+  highlight whose latest human judgment differs from its latest AI call at the code's
+  threshold).
+- A **merge pass** (added 2026-11-16 at the user's request): when the drafted include or
+  exclude list has more than one rule, a second OpenAI call merges that list into one line,
+  keeping every condition. A list with one rule is left alone. The second call counts toward
+  the daily cap and is skipped if it would pass it; if it fails or returns a blank line, the
+  unmerged list is kept. The original lists and the second call's prompt and tokens are in
+  `ai_metadata.merge`. `drift.merge_rules: false` turns it off.
+
+Model, effort, cap, example limit, the OpenAI timeout (`timeout_seconds: 120`) and
+`merge_rules` come from the `drift:` block in `backend/config.yaml`.
+
+Behaviour added in the final fix round:
+
+- A suggested proposal reports `stale_parts` (computed when serialized, not stored): the parts
+  whose live value no longer matches `base`. The panel marks them "changed since drafted",
+  and accepting them is refused (409).
+- A threshold-only proposal is scored with one Jev question per highlight; its probability
+  is compared with the current threshold for "before" and the proposed one for "after".
+- Rolling back is refused (409) while any proposal of the code is being scored, and scoring
+  is refused for a retired code.
+- The export carries each proposal's model, effort, input and output tokens, disagreements
+  and session judgments, but not the prompt.
+
+Known limitations:
+
+- Rules change only through proposals; there is no hand edit of rules yet. The model cannot
+  propose clearing a list (an empty list means "unchanged"), but the researcher can clear one
+  when accepting.
+- Dismissing a proposal while the same disagreement remains means the next session end
+  drafts again; only the daily token cap bounds this.
+- Every code's proposals are fetched on page load (one request per code).
 
 ## Milestones
 
 1. Repo and backend, import, embedding, search runs, review screen and bulk actions,
    codebook edits with revisions, agreement, export.
-2. Automatic drift proposals after each session (OpenAI, no warning, daily spend cap in
+2. Automatic drift proposals after each session (OpenAI, no warning, daily token cap in
    config), accept/edit/dismiss, re-score with Jev and show agreement before and after,
    roll back.
 

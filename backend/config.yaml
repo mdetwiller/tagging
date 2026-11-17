@@ -1,0 +1,34 @@
+# Paths are relative to Tagging/ unless absolute.
+user_id: 101
+cortico_db_path: ../acp_pipeline_snapshot.db
+tagging_db_path: db/tagging.db  # TAGGING_DB_PATH overrides
+
+search:
+  max_tries_per_code: 200
+  target_positives: 10
+  hard_to_find_below: 5
+  random_share: 0.2  # every round(1/share)-th slot is random, so only shares like 0.2, 0.25 or 0.5 are exact
+  jev_concurrency: 4
+  sample_size: 200  # highlights a sample run judges against every active code
+
+jev:
+  url: https://api.typesafe.ai/v1/systemone
+  model: jev-latest
+  max_attempts: 5
+  backoff_start_seconds: 2
+  max_starred_examples: 5  # starred highlights per code; Jev sees them all as examples that fit
+  state_note: "A highlight from a recorded small-group community conversation (the American Conversation Project)."
+
+embeddings:
+  model: text-embedding-3-small
+  dir: data/embeddings  # TAGGING_EMBEDDINGS_DIR overrides
+  batch_size: 256
+  usd_per_million_tokens: 0.02
+
+drift:
+  model: gpt-5.6-luna  # same as Notes in the Margin's ai_review
+  reasoning_effort: low
+  daily_token_cap: 500000  # input plus output tokens of today's (local day) proposals
+  max_judged_examples: 40
+  timeout_seconds: 120  # per OpenAI call when drafting a proposal
+  merge_rules: true  # a second call merges a proposal's include rules into one line, and its exclude rules into one line
