@@ -99,6 +99,17 @@ export const api = {
   agreement: (codeId: number) => request<Agreement>(`/codes/${codeId}/agreement`),
   judge: (body: JudgmentRequest) =>
     request<{ written: number }>("/judgments", { method: "POST", body: JSON.stringify(body) }),
+  /** Starring also accepts the highlight for the code; unstarring keeps the accept. */
+  star: (codeId: number, highlightId: number, starred: boolean) =>
+    request<{ highlight_id: number; code_id: number; starred: boolean }>("/stars", {
+      method: "POST",
+      body: JSON.stringify({ code_id: codeId, highlight_id: highlightId, starred }),
+    }),
+  setFacilitator: (highlightIds: number[], facilitator: boolean) =>
+    request<{ changed: number; facilitator: boolean }>("/facilitator", {
+      method: "POST",
+      body: JSON.stringify({ highlight_ids: highlightIds, facilitator }),
+    }),
   setHighlightStatus: (highlightIds: number[], status: HighlightReviewStatus) =>
     request<HighlightStatusResult>("/highlight_status", {
       method: "POST",

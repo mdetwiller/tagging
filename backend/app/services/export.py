@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Code, Codebook, CodeRevision, CodeRules, Coding, DriftProposal
 from ..models_cortico import Highlight
+from . import marks
 from .family_notes import current_notes
 from .judgments import agreement, latest_by_pair
 from .search_run import code_instructions
@@ -150,6 +151,8 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                     "rules_history": rules_history[c.id],
                     "agreement": agreement(db_t, c.id),
                     "proposals": proposals[c.id],
+                    # Highlights the researcher starred as good examples; Jev always sees them.
+                    "starred_highlight_ids": marks.starred_ids(db_t, c.id),
                 }
                 for c in codes
             },
@@ -159,6 +162,11 @@ def build_export(db_t: Session, db_c: Session) -> dict:
                 for code_id, n in sorted(notes.items())
                 if n.text.strip()
             },
+            # Excluded from tagging, agreement and Jev examples; their codings above are kept.
+            "facilitator_turns": [
+                {"highlight_id": h, "marked_at": _iso(at)}
+                for h, at in sorted(marks.facilitator_marked_at(db_t).items())
+            ],
             "deviations": list(DEVIATIONS),
             # Re-importing starts a new codebook; codings on older ones are counted, not exported.
             "earlier_codebooks": [{"id": i, "name": n, "codings": count} for i, n, count in earlier],

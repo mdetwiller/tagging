@@ -154,6 +154,10 @@ export interface Row {
   /** Where the row came from: the sample run, a find-more similarity pick, or a find-more
    * random pick (sample wins). Null for a final yes from none of these. */
   source: RowSource | null;
+  /** Starred as a good example of this code; Jev always sees it as one that fits. */
+  starred: boolean;
+  /** Marked as a facilitator turn, for every code. */
+  facilitator: boolean;
   other_codes: OtherCodeFinal[];
 }
 
@@ -173,6 +177,8 @@ export interface ReviewData {
   below_threshold: Row[];
   /** The current sample's highlights scored for this code and find-more random picks, not found. */
   random: Row[];
+  /** Every facilitator turn (all codes), newest mark first; left out of the sections above. */
+  facilitator: Row[];
 }
 
 export interface JudgmentRequest {

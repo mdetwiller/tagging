@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..db import get_cortico_db, get_tagging_db
-from ..schemas import HighlightStatusRequest, JudgmentRequest
+from ..schemas import FacilitatorRequest, HighlightStatusRequest, JudgmentRequest, StarRequest
 from ..services import judgments
 from ..services.codebook_edit import CodeNotFound
 
@@ -61,3 +61,31 @@ def highlight_status(
     except judgments.UnknownHighlights as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"updated": len(set(body.highlight_ids)), "status": body.status}
+
+
+@router.post("/stars")
+def star(
+    body: StarRequest,
+    db: Session = Depends(get_tagging_db),
+    db_c: Session = Depends(get_cortico_db),
+) -> dict:
+    try:
+        return judgments.star(db, body.code_id, body.highlight_id, body.starred, db_c=db_c)
+    except CodeNotFound as exc:
+        raise _code_404(body.code_id) from exc
+    except judgments.UnknownHighlights as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except judgments.FacilitatorTurn as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/facilitator")
+def facilitator(
+    body: FacilitatorRequest,
+    db: Session = Depends(get_tagging_db),
+    db_c: Session = Depends(get_cortico_db),
+) -> dict:
+    try:
+        return judgments.set_facilitator(db, body.highlight_ids, body.facilitator, db_c=db_c)
+    except judgments.UnknownHighlights as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

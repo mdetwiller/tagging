@@ -291,7 +291,7 @@ def test_review_combines_sample_and_find_more_runs(client, db, codes, highlights
     assert first == {
         "highlight_id": h[0], "conversation_id": row.conversation_id, "project_id": project_id,
         "text": text, "ai_probability": 0.9, "human": None, "final": True,
-        "status": first["status"], "source": "sample",
+        "status": first["status"], "source": "sample", "starred": False, "facilitator": False,
         "other_codes": [{"code_id": b, "name": "B", "final": False}, {"code_id": codes["C"], "name": "C", "final": None}],
     }
     assert first["status"] in ("not_started", "in_progress", "completed")

@@ -86,6 +86,19 @@ each code's tagging prompt improves from those judgments.
   Cohen's kappa over highlights with both judgments.
 - A review session ends on "Done reviewing", or on leaving the code's view after at least 5
   new judgments. (Milestone 2 hangs the drift check on this.)
+- Highlight marks (table `highlight_mark`, append-only; the newest row per kind, highlight and
+  code is current):
+  - **Facilitator turn** ("Facilitator" on a row) applies to every code. The highlight leaves
+    every code's review, sample runs, Find more, agreement, drift disagreements and judged
+    examples, "Test with Jev", and Jev's human examples. Its judgments are kept and ignored. The
+    row is replaced by "#id marked as a facilitator turn. Undo" until the code is left, and each
+    review lists all facilitator turns in a collapsed "Facilitator turns (N)" with "Not a
+    facilitator turn".
+  - **Star** (☆ on a row) is per code. Starring also accepts the highlight (a new applied row,
+    unless it is already accepted) and pins it as a "fits" example in the code's Jev
+    instructions, after the imported exemplars and not limited by the 10 recent accepts.
+    Unstarring keeps the accept; rejecting a starred highlight unstars it. A facilitator turn
+    can't be starred (409), and a star on one is ignored while it is marked.
 
 ## Export
 
@@ -93,7 +106,8 @@ One JSON file: `codebook.codes[]` (`id, name, description, parent_id, code_type`
 `codings[]` (every human and AI judgment, with `final`), and an `x_tagging` block (each
 code's instructions, threshold, revision history, agreement, current include/exclude `rules`
 and `rules_history`, plus `family_notes`: each parent code's current non-empty "possibly
-missing codes" note).
+missing codes" note), each code's `starred_highlight_ids`, and `facilitator_turns`
+(`highlight_id`, `marked_at`).
 
 ## Drift proposals
 

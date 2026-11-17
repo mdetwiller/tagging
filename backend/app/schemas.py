@@ -37,6 +37,17 @@ class JudgmentRequest(BaseModel):
     applied: bool
 
 
+class StarRequest(BaseModel):
+    code_id: int
+    highlight_id: int
+    starred: bool
+
+
+class FacilitatorRequest(BaseModel):
+    highlight_ids: list[int] = Field(min_length=1)
+    facilitator: bool
+
+
 class HighlightStatusRequest(BaseModel):
     highlight_ids: list[int] = Field(min_length=1)
     status: Literal["not_started", "in_progress", "completed"]

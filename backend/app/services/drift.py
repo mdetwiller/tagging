@@ -15,7 +15,7 @@ from ..db import CorticoSession, TaggingSession
 from ..models import Code, CodeRevision, DriftProposal, ProposalScore
 from ..models_cortico import Highlight
 from ..schemas import CodeEdit
-from . import judgments, rules, search_run
+from . import judgments, marks, rules, search_run
 from .codebook_edit import CodeNotFound, edit_code
 from .export import _iso
 from .jev import HttpJevClient, JevClient, JevError, build_keyed_request, parse_keyed_noul
@@ -154,7 +154,12 @@ def _base(db: Session, code: Code) -> dict:
 def _judged_examples(db: Session, code: Code, disagreeing: list[int]) -> list[tuple[int, str, float | None]]:
     """(highlight_id, human verdict, AI probability) for human-judged highlights, disagreements
     first, then the newest other judgments, at most max_judged_examples."""
-    latest = {hid: l for (_, hid), l in judgments.latest_by_pair(db, [code.id]).items() if l.human is not None}
+    facilitator = marks.facilitator_ids(db)
+    latest = {
+        hid: l
+        for (_, hid), l in judgments.latest_by_pair(db, [code.id]).items()
+        if l.human is not None and hid not in facilitator
+    }
     disagreeing_set = set(disagreeing)
     others = sorted((h for h in latest if h not in disagreeing_set), key=lambda h: -latest[h].human_id)
     ordered = [h for h in disagreeing if h in latest] + others
@@ -480,11 +485,12 @@ def get_proposal(db: Session, proposal_id: int) -> DriftProposal:
 
 def _judged(db: Session, code_id: int) -> dict[int, str]:
     """highlight_id -> latest human verdict, for highlights whose latest human row for the code
-    is applied or not_applied."""
+    is applied or not_applied, leaving out facilitator turns."""
+    facilitator = marks.facilitator_ids(db)
     return {
         hid: latest.human
         for (_, hid), latest in judgments.latest_by_pair(db, [code_id]).items()
-        if latest.human in ("applied", "not_applied")
+        if latest.human in ("applied", "not_applied") and hid not in facilitator
     }
 
 

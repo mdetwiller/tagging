@@ -180,3 +180,19 @@ class ProposalScore(Base):
     current_p = Column(Float)
     proposed_p = Column(Float)
     created_at = Column(DateTime, nullable=False, default=_now)
+
+
+class HighlightMark(Base):
+    """A facilitator-turn mark (code_id null, applies to every code) or a star for one code.
+    Rows are never deleted; the newest row per (kind, highlight_id, code_id) is the current
+    state."""
+
+    __tablename__ = "highlight_mark"
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String, nullable=False)  # facilitator | star
+    highlight_id = Column(Integer, nullable=False, index=True)
+    code_id = Column(Integer, ForeignKey("code.id"), index=True)
+    active = Column(Boolean, nullable=False)
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_now)

@@ -10,7 +10,7 @@ from ..config import get_config
 from ..db import CorticoSession
 from ..models import Code, Coding, HighlightStatus, RunHighlight, SearchRun
 from ..models_cortico import Conversation, Highlight
-from . import embeddings
+from . import embeddings, marks
 from .codebook_edit import CodeNotFound
 
 Status = Literal["not_started", "in_progress", "completed"]
@@ -18,6 +18,12 @@ Status = Literal["not_started", "in_progress", "completed"]
 # Cortico's bulkMarkAsNotDone sets "Pending", the undo of bulkMarkAsDone's "Done"; neither
 # is in its highlight status menu, so "not done" maps to the start of this app's workflow.
 NOT_DONE: Status = "not_started"
+
+
+class FacilitatorTurn(ValueError):
+    def __init__(self, highlight_id: int) -> None:
+        super().__init__(f"Highlight {highlight_id} is marked as a facilitator turn; un-mark it before starring.")
+        self.highlight_id = highlight_id
 
 
 class UnknownHighlights(LookupError):
@@ -68,6 +74,15 @@ def judge(
     if db.get(Code, code_id) is None:
         raise CodeNotFound(code_id)
     conversations = _with_cortico(db_c, lambda s: _conversations(s, highlight_ids))
+    _add_human(db, code_id, highlight_ids, conversations, applied)
+    if not applied:
+        # A star means "fits", so rejecting a starred highlight unstars it.
+        marks.write(db, marks.STAR, highlight_ids, False, code_id=code_id)
+    db.commit()
+    return len(highlight_ids)
+
+
+def _add_human(db: Session, code_id: int, highlight_ids: list[int], conversations: dict[int, int], applied: bool) -> None:
     user_id = get_config().user_id
     status = "applied" if applied else "not_applied"
     for hid in highlight_ids:
@@ -78,8 +93,32 @@ def judge(
                 status=status, created_by=user_id,
             )
         )
+
+
+def star(db: Session, code_id: int, highlight_id: int, starred: bool, db_c: Session | None = None) -> dict:
+    """Stars or unstars a highlight for a code. Starring also accepts it (a new applied row,
+    unless its latest human row for the code is already applied); unstarring keeps the accept."""
+    if db.get(Code, code_id) is None:
+        raise CodeNotFound(code_id)
+    conversations = _with_cortico(db_c, lambda s: _conversations(s, [highlight_id]))
+    if starred:
+        if highlight_id in marks.facilitator_ids(db):
+            raise FacilitatorTurn(highlight_id)
+        latest = latest_by_pair(db, [code_id], [highlight_id]).get((code_id, highlight_id))
+        if latest is None or latest.human != "applied":
+            _add_human(db, code_id, [highlight_id], conversations, True)
+    marks.write(db, marks.STAR, [highlight_id], starred, code_id=code_id)
     db.commit()
-    return len(highlight_ids)
+    return {"highlight_id": highlight_id, "code_id": code_id, "starred": starred}
+
+
+def set_facilitator(db: Session, highlight_ids: list[int], facilitator: bool, db_c: Session | None = None) -> dict:
+    """Marks or un-marks highlights as facilitator turns, for every code. Judgments and stars
+    on them are kept and ignored while marked."""
+    _with_cortico(db_c, lambda s: _conversations(s, highlight_ids))
+    changed = marks.write(db, marks.FACILITATOR, highlight_ids, facilitator)
+    db.commit()
+    return {"changed": changed, "facilitator": facilitator}
 
 
 def set_status(db: Session, highlight_ids: list[int], status: Status, db_c: Session | None = None) -> None:
@@ -126,13 +165,15 @@ def final_for(db: Session, code_id: int, highlight_id: int) -> bool | None:
 
 
 def _human_ai_pairs(db: Session, code_id: int) -> list[tuple[int, bool, bool]]:
-    """(highlight_id, human yes, AI yes) for highlights with both sides, by highlight id."""
+    """(highlight_id, human yes, AI yes) for highlights with both sides, by highlight id,
+    leaving out facilitator turns."""
     code = db.get(Code, code_id)
     if code is None:
         raise CodeNotFound(code_id)
     out = []
+    facilitator = marks.facilitator_ids(db)
     for (_, highlight_id), latest in latest_by_pair(db, [code_id]).items():
-        if latest.human is None or latest.ai_probability is None:
+        if latest.human is None or latest.ai_probability is None or highlight_id in facilitator:
             continue
         out.append((highlight_id, latest.human == "applied", latest.ai_probability >= code.threshold))
     return sorted(out)
@@ -196,7 +237,8 @@ def latest_sample_run_id(db: Session, code_id: int) -> int | None:
 def review(db: Session, db_c: Session, code_id: int) -> dict:
     """The code's current sample and every find-more run for the code, one row per highlight, with
     priority found > random > below threshold. Find-more rows include older runs' per-code
-    searches (run_highlight rows targeting this code)."""
+    searches (run_highlight rows targeting this code). Facilitator turns are left out of those
+    sections and listed, from every code, in `facilitator`."""
     code = db.get(Code, code_id)
     if code is None:
         raise CodeNotFound(code_id)
@@ -234,7 +276,8 @@ def review(db: Session, db_c: Session, code_id: int) -> dict:
     source: dict[int, str] = {h: "sample" for h in sample_ids}
     for _, hid, _ in search_rows:
         source.setdefault(hid, "random" if hid in picked_random else "search")
-    candidates = list(source)
+    facilitator_at = marks.facilitator_marked_at(db)
+    candidates = [h for h in source if h not in facilitator_at]
 
     this_code = latest_by_pair(db, [code_id])
 
@@ -249,12 +292,15 @@ def review(db: Session, db_c: Session, code_id: int) -> dict:
     random_set = set(random_ids)
     below_ids = [h for h in candidates if h not in found_set and h not in random_set]
     final_yes = [h for (_, h), latest in this_code.items() if latest.final(code.threshold) is True]
-    extra = [h for h in final_yes if h not in source]
+    extra = [h for h in final_yes if h not in source and h not in facilitator_at]
     # Final-yes highlights from no current source: newest judgment first.
     extra.sort(key=lambda h: -max(this_code[(code_id, h)].human_id, this_code[(code_id, h)].ai_id))
     found_ids = found_listed + extra
 
-    listed = list(dict.fromkeys(found_ids + below_ids + random_ids))
+    # Newest mark first.
+    facilitator_ids = sorted(facilitator_at, key=lambda h: facilitator_at[h], reverse=True)
+    starred = set(marks.starred_ids(db, code_id))
+    listed = list(dict.fromkeys(found_ids + below_ids + random_ids + facilitator_ids))
     others = [c for c in embeddings.current_active_codes(db) if c.id != code_id]
     other_latest = latest_by_pair(db, [c.id for c in others], listed) if others and listed else {}
     texts = {
@@ -287,6 +333,8 @@ def review(db: Session, db_c: Session, code_id: int) -> dict:
             "final": latest.final(code.threshold),
             "status": statuses.get(hid, "not_started"),
             "source": source.get(hid),
+            "starred": hid in starred,
+            "facilitator": hid in facilitator_at,
             "other_codes": [
                 {
                     "code_id": c.id,
@@ -305,4 +353,5 @@ def review(db: Session, db_c: Session, code_id: int) -> dict:
         "found": [row(h) for h in found_ids],
         "below_threshold": [row(h) for h in below_ids],
         "random": [row(h) for h in random_ids],
+        "facilitator": [row(h) for h in facilitator_ids],
     }

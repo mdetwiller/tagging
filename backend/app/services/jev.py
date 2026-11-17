@@ -46,9 +46,11 @@ def build_instructions(
     exclude: Sequence[str] = (),
     name: str | None = None,
     definition: str | None = None,
+    starred: Sequence[str] = (),
 ) -> str:
     """Noul instructions for one code. `accepted` and `rejected` are newest first. `name` and
-    `definition`, when given, replace the code's own (to score a proposal)."""
+    `definition`, when given, replace the code's own (to score a proposal). `starred` texts are
+    pinned "fits" examples, not limited by MAX_HUMAN_EXAMPLES."""
     name = code.name if name is None else name
     definition = ((code.definition if definition is None else definition) or "").strip()
     lines = [f"Does this highlight fit the code \"{name}\"?"]
@@ -61,7 +63,11 @@ def build_instructions(
         lines.append("Does not count when:")
         lines.extend(f"- {r}" for r in exclude)
 
-    fits = [_clip(e.text) for e in exemplars] + [_clip(t) for t in accepted[:MAX_HUMAN_EXAMPLES]]
+    fits = (
+        [_clip(e.text) for e in exemplars]
+        + [_clip(t) for t in starred]
+        + [_clip(t) for t in accepted[:MAX_HUMAN_EXAMPLES]]
+    )
     not_fits = [_clip(t) for t in rejected[:MAX_HUMAN_EXAMPLES]]
     if fits:
         lines.append("Examples that fit:")

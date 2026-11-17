@@ -16,7 +16,7 @@ from ..config import get_config
 from ..db import CorticoSession, TaggingSession
 from ..models import Code, CodeExemplar, Coding, DriftProposal, RunHighlight, SearchRun
 from ..models_cortico import Highlight
-from . import embeddings, rules
+from . import embeddings, marks, rules
 from .embeddings import rank_candidates
 from .jev import (
     MAX_HUMAN_EXAMPLES,
@@ -59,10 +59,14 @@ def _now() -> datetime:
 
 
 def _human_examples(
-    db_t: Session, code_id: int, texts: dict[int, str], exclude_highlight: int | None = None
+    db_t: Session,
+    code_id: int,
+    texts: dict[int, str],
+    exclude_highlight: int | None = None,
+    skip: set[int] = frozenset(),
 ) -> tuple[list[str], list[str]]:
     """Texts of the newest highlights whose latest human coding for the code is applied or
-    not_applied, newest first, leaving out exclude_highlight."""
+    not_applied, newest first, leaving out exclude_highlight, facilitator turns and `skip`."""
     rows = db_t.execute(
         select(Coding.highlight_id, Coding.status)
         .where(Coding.code_id == code_id, Coding.is_ai_generated.is_(False))
@@ -72,6 +76,8 @@ def _human_examples(
     for hid, status in rows:
         latest.setdefault(hid, status)
     latest.pop(exclude_highlight, None)
+    for hid in marks.facilitator_ids(db_t) | skip:
+        latest.pop(hid, None)
     accepted = [texts[h] for h, s in latest.items() if s == "applied" and h in texts]
     rejected = [texts[h] for h, s in latest.items() if s == "not_applied" and h in texts]
     return accepted[:MAX_HUMAN_EXAMPLES], rejected[:MAX_HUMAN_EXAMPLES]
@@ -87,18 +93,25 @@ def code_instructions(
     """The Noul instructions Jev sees for the code now. `texts` maps highlight_id to text and
     must cover the code's human-judged highlights. `override` is shaped like a drift proposal's
     `proposed` (any of name, definition, threshold, include, exclude); its keys win over the
-    code's current values. Threshold is not part of the text."""
+    code's current values. Threshold is not part of the text. Starred highlights are always
+    "fits" examples, after the imported exemplars."""
     override = override or {}
     exemplars = list(
         db_t.scalars(select(CodeExemplar).where(CodeExemplar.code_id == code.id).order_by(CodeExemplar.id))
     )
-    accepted, rejected = _human_examples(db_t, code.id, texts, exclude_highlight)
+    facilitator = marks.facilitator_ids(db_t)
+    starred_ids = [
+        h for h in marks.starred_ids(db_t, code.id) if h != exclude_highlight and h not in facilitator and h in texts
+    ]
+    starred = [texts[h] for h in starred_ids]
+    accepted, rejected = _human_examples(db_t, code.id, texts, exclude_highlight, skip=set(starred_ids))
     include, exclude = rules.current_rules(db_t, code.id)
     return build_instructions(
         code,
         exemplars,
         accepted,
         rejected,
+        starred=starred,
         include=override.get("include", include),
         exclude=override.get("exclude", exclude),
         name=override.get("name"),
@@ -233,7 +246,9 @@ class _Judging:
                 select(Highlight.id, Highlight.text, Highlight.conversation_id).order_by(Highlight.id)
             )
         }
-        self.all_ids = list(self.highlights)
+        # Facilitator turns are never sampled or searched.
+        facilitator = marks.facilitator_ids(db_t)
+        self.all_ids = [h for h in self.highlights if h not in facilitator]
         texts = {hid: text for hid, (text, _) in self.highlights.items()}
         # Snapshotted once; codes retired mid-run keep being judged and written under these ids.
         judge = [_snapshot(db_t, c, texts) for c in embeddings.current_active_codes(db_t)]
@@ -382,7 +397,8 @@ def _find_more(
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.jev_concurrency)) as pool:
         judging = _Judging(db_c, db_t, run_id, client, pool, [code], summarize)
-        queue = _queue(rank(code), judging.all_ids, judging.human_judged[code], random_every, rng)
+        excluded = judging.human_judged[code] | (set(judging.highlights) - set(judging.all_ids))
+        queue = _queue(rank(code), judging.all_ids, excluded, random_every, rng)
         while judging.positives[code] < cfg.target_positives and tries < cfg.max_tries_per_code:
             size = min(cfg.jev_concurrency, cfg.max_tries_per_code - tries)
             batch = [item for _, item in zip(range(size), queue)]

@@ -390,6 +390,39 @@ select {
   color: #fff;
 }
 
+.hl-actions .star.on {
+  background: #b7791f;
+  color: #fff;
+}
+
+.hl-actions button.facilitator {
+  width: auto;
+  font-size: 0.8rem;
+}
+
+.marked-line {
+  list-style: none;
+  padding: 8px;
+  border: 1px dashed #c8c8c8;
+  border-radius: 6px;
+  margin: 6px 0;
+  color: #555;
+}
+
+.facilitator-turns {
+  margin-top: 16px;
+}
+
+.facilitator-turns ul {
+  padding-left: 0;
+}
+
+.facilitator-row {
+  list-style: none;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
 .find-more {
   margin-top: 8px;
 }

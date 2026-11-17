@@ -61,6 +61,16 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
    and Find more's random picks), and a collapsed "Below threshold" section (Find more's other similarity
    picks, including unscored ones). Each row is labelled sample, search or random.
 
+Two marks on a review row:
+- "Facilitator" marks the highlight as a facilitator turn for every code: it leaves every
+  review, future sample runs and Find more, agreement, drift and "Test with Jev", and is never
+  one of Jev's examples. Its judgments are kept. "Undo" appears in its place right after, and
+  "Facilitator turns (N)" at the bottom of each review un-marks it later (`POST /facilitator`).
+- ☆ stars the highlight as a good example of the code: it also accepts it, and Jev always sees
+  it as one that fits. Unstarring keeps the accept; rejecting it removes the star
+  (`POST /stars`).
+The export lists each code's `starred_highlight_ids` and the `facilitator_turns`.
+
 Each code family (a top-level code) has a notepad, "Possibly missing codes", for codes that
 seem to be missing from it. Open it under the parent with "Notes" in the code list (a dot
 marks a family with a note), or with "Family notes: <parent>" above a code's review; both
@@ -90,7 +100,7 @@ restored when the note is reopened. The export carries the current non-empty not
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 206 tests, about 5 s
+cd backend && .venv/bin/python -m pytest -q        # 215 tests, about 5 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

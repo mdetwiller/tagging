@@ -34,6 +34,15 @@ interface Props {
   onProposalDecided: (codeId: number) => Promise<void>;
 }
 
+type Section = "found" | "below_threshold" | "random";
+
+/** A row marked as a facilitator turn in this view: it keeps its place, with an undo line. */
+interface JustMarked {
+  section: Section;
+  index: number;
+  row: Row;
+}
+
 export interface Judged {
   codeId: number;
   highlightIds: number[];
@@ -86,6 +95,7 @@ export default function ReviewPane({
   // A new object per click, so clicking again scrolls again.
   const [scrollTarget, setScrollTarget] = useState<{ id: number } | null>(null);
   const [flagMessage, setFlagMessage] = useState<string | null>(null);
+  const [justMarked, setJustMarked] = useState<Map<number, JustMarked>>(new Map());
 
   useEffect(() => {
     if (scrollTarget === null) return;
@@ -145,6 +155,22 @@ export default function ReviewPane({
     },
     [codeId, fetchReview, onChanged]
   );
+
+  async function markFacilitator(row: Row, section: Section, index: number) {
+    await api.setFacilitator([row.highlight_id], true);
+    setJustMarked((prev) => new Map(prev).set(row.highlight_id, { section, index, row }));
+    await afterChange(null);
+  }
+
+  async function unmarkFacilitator(highlightId: number) {
+    await api.setFacilitator([highlightId], false);
+    setJustMarked((prev) => {
+      const next = new Map(prev);
+      next.delete(highlightId);
+      return next;
+    });
+    await afterChange(null);
+  }
 
   async function afterBulk(judged: Judged | null) {
     await afterChange(judged);
@@ -211,7 +237,19 @@ export default function ReviewPane({
   const findingMore = anyRunning && run?.scope_code_id === codeId;
   const findMoreCount = data.find_more_run_ids.length;
   const otherCodes = activeCodes.filter((c) => c.id !== codeId);
-  const rowProps = { codeId, otherCodes, selected, flagged, onToggle: toggle, onJudged: afterChange };
+  const rowProps = {
+    codeId,
+    otherCodes,
+    selected,
+    flagged,
+    justMarked,
+    onToggle: toggle,
+    onJudged: afterChange,
+    onRefresh: () => afterChange(null),
+    onFacilitator: markFacilitator,
+    onUndoFacilitator: unmarkFacilitator,
+  };
+  const facilitatorRows = data.facilitator.filter((r) => !justMarked.has(r.highlight_id));
   const family = codebook.codes.find((p) => p.id === codeId || p.children.some((c) => c.id === codeId));
 
   return (
@@ -295,35 +333,89 @@ export default function ReviewPane({
           onClear={() => setSelected(new Set())}
         />
       )}
-      <RowList title="Found" rows={data.found} empty="Nothing found yet." onToggleAll={toggleAll} {...rowProps} />
+      <RowList
+        title="Found"
+        section="found"
+        rows={data.found}
+        empty="Nothing found yet."
+        onToggleAll={toggleAll}
+        {...rowProps}
+      />
       {data.below_threshold.length > 0 && (
         <details className="below-threshold" open={belowOpen} onToggle={(e) => setBelowOpen(e.currentTarget.open)}>
           <summary>Below threshold ({data.below_threshold.length})</summary>
-          <RowList title="Below threshold" rows={data.below_threshold} empty="" onToggleAll={toggleAll} {...rowProps} />
+          <RowList
+            title="Below threshold"
+            section="below_threshold"
+            rows={data.below_threshold}
+            empty=""
+            onToggleAll={toggleAll}
+            {...rowProps}
+          />
         </details>
       )}
       <div className="divider">Random sample</div>
-      <RowList title="Random sample" rows={data.random} empty="No random sample." onToggleAll={toggleAll} {...rowProps} />
+      <RowList
+        title="Random sample"
+        section="random"
+        rows={data.random}
+        empty="No random sample."
+        onToggleAll={toggleAll}
+        {...rowProps}
+      />
+      {facilitatorRows.length > 0 && (
+        <details className="facilitator-turns">
+          <summary>Facilitator turns ({facilitatorRows.length})</summary>
+          <p className="muted">
+            Left out of every code's review, sample runs, Find more, agreement and Jev's examples.
+          </p>
+          <ul>
+            {facilitatorRows.map((r) => (
+              <FacilitatorRow key={r.highlight_id} row={r} onUnmark={unmarkFacilitator} />
+            ))}
+          </ul>
+        </details>
+      )}
     </div>
   );
 }
 
 interface RowListProps {
   title: string;
+  section: Section;
   rows: Row[];
   empty: string;
   codeId: number;
   otherCodes: CodeOut[];
   selected: Set<number>;
   flagged: Set<number>;
+  justMarked: Map<number, JustMarked>;
   onToggle: (id: number) => void;
   onToggleAll: (rows: Row[], on: boolean) => void;
   onJudged: (judged: Judged) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onFacilitator: (row: Row, section: Section, index: number) => Promise<void>;
+  onUndoFacilitator: (highlightId: number) => Promise<void>;
 }
 
-function RowList({ title, rows, empty, onToggleAll, ...rowProps }: RowListProps) {
-  if (rows.length === 0) return <p className="muted">{empty}</p>;
-  const allOn = rows.every((r) => rowProps.selected.has(r.highlight_id));
+type ListItem = { kind: "row"; row: Row; index: number } | { kind: "marked"; row: Row };
+
+function RowList({
+  title,
+  section,
+  rows,
+  empty,
+  onToggleAll,
+  justMarked,
+  onFacilitator,
+  onUndoFacilitator,
+  ...rowProps
+}: RowListProps) {
+  const items: ListItem[] = rows.map((row, index) => ({ kind: "row", row, index }));
+  const marked = [...justMarked.values()].filter((m) => m.section === section).sort((a, b) => a.index - b.index);
+  for (const m of marked) items.splice(Math.min(m.index, items.length), 0, { kind: "marked", row: m.row });
+  if (items.length === 0) return <p className="muted">{empty}</p>;
+  const allOn = rows.length > 0 && rows.every((r) => rowProps.selected.has(r.highlight_id));
   return (
     <div className="row-list">
       <label className="select-all">
@@ -331,11 +423,76 @@ function RowList({ title, rows, empty, onToggleAll, ...rowProps }: RowListProps)
         {title.toLowerCase()} ({rows.length})
       </label>
       <ul>
-        {rows.map((r) => (
-          <HighlightRow key={r.highlight_id} row={r} {...rowProps} />
-        ))}
+        {items.map((item) =>
+          item.kind === "row" ? (
+            <HighlightRow
+              key={item.row.highlight_id}
+              row={item.row}
+              onFacilitator={() => onFacilitator(item.row, section, item.index)}
+              {...rowProps}
+            />
+          ) : (
+            <MarkedLine key={item.row.highlight_id} row={item.row} onUndo={onUndoFacilitator} />
+          )
+        )}
       </ul>
     </div>
+  );
+}
+
+function MarkedLine({ row, onUndo }: { row: Row; onUndo: (highlightId: number) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function undo() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onUndo(row.highlight_id);
+    } catch (err) {
+      setError(errorDetail(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="marked-line">
+      <span>#{row.highlight_id} marked as a facilitator turn.</span>{" "}
+      <button onClick={undo} disabled={busy}>
+        Undo
+      </button>
+      {error && <p className="error">{error}</p>}
+    </li>
+  );
+}
+
+function FacilitatorRow({ row, onUnmark }: { row: Row; onUnmark: (highlightId: number) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function unmark() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onUnmark(row.highlight_id);
+    } catch (err) {
+      setError(errorDetail(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="facilitator-row">
+      <div className="hl-meta">
+        <span>#{row.highlight_id}</span>
+        <span>conv {row.conversation_id ?? "—"}</span>
+      </div>
+      <p className="hl-text clamped">{row.text}</p>
+      <button onClick={unmark} disabled={busy}>
+        Not a facilitator turn
+      </button>
+      {error && <p className="error">{error}</p>}
+    </li>
   );
 }
 
@@ -347,9 +504,21 @@ interface HighlightRowProps {
   flagged: Set<number>;
   onToggle: (id: number) => void;
   onJudged: (judged: Judged) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onFacilitator: () => Promise<void>;
 }
 
-function HighlightRow({ row, codeId, otherCodes, selected, flagged, onToggle, onJudged }: HighlightRowProps) {
+function HighlightRow({
+  row,
+  codeId,
+  otherCodes,
+  selected,
+  flagged,
+  onToggle,
+  onJudged,
+  onRefresh,
+  onFacilitator,
+}: HighlightRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -365,6 +534,31 @@ function HighlightRow({ row, codeId, otherCodes, selected, flagged, onToggle, on
     } catch (err) {
       setError(errorDetail(err));
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function star() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.star(codeId, row.highlight_id, !row.starred);
+      if (row.starred) await onRefresh();
+      else await onJudged({ codeId, highlightIds: [row.highlight_id] });
+    } catch (err) {
+      setError(errorDetail(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function markFacilitator() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onFacilitator();
+    } catch (err) {
+      setError(errorDetail(err));
       setBusy(false);
     }
   }
@@ -444,6 +638,19 @@ function HighlightRow({ row, codeId, otherCodes, selected, flagged, onToggle, on
       </div>
       <div className="hl-actions">
         <button
+          className={`star${row.starred ? " on" : ""}`}
+          onClick={star}
+          disabled={busy}
+          title={
+            row.starred
+              ? "Starred as a good example; click to unstar (the accept stays)"
+              : "Star as a good example of this code: accepts it, and Jev always sees it as one that fits"
+          }
+          aria-pressed={row.starred}
+        >
+          {row.starred ? "★" : "☆"}
+        </button>
+        <button
           className={`accept${row.human === "applied" ? " on" : ""}`}
           onClick={() => judge(codeId, true)}
           disabled={busy}
@@ -458,6 +665,14 @@ function HighlightRow({ row, codeId, otherCodes, selected, flagged, onToggle, on
           title="Reject: this code does not apply"
         >
           ✗
+        </button>
+        <button
+          className="facilitator"
+          onClick={markFacilitator}
+          disabled={busy}
+          title="Facilitator turn: leave this highlight out of tagging for every code"
+        >
+          Facilitator
         </button>
       </div>
     </li>
