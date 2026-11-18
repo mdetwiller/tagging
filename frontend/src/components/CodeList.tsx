@@ -116,6 +116,7 @@ export default function CodeList({
   return (
     <section className="panel codes">
       <h2>{codebook.name}</h2>
+      <NewCodeForm parentId={null} label="+ code" onAdded={onEdited} />
       <ul className="code-tree">
         {parents.map((parent) => (
           <li key={parent.id}>
@@ -157,6 +158,11 @@ export default function CodeList({
                   </li>
                 ))}
               </ul>
+            )}
+            {!collapsed.has(parent.id) && (
+              <div className="children">
+                <NewCodeForm parentId={parent.id} label="+ child" onAdded={onEdited} />
+              </div>
             )}
           </li>
         ))}
@@ -328,6 +334,68 @@ function CodeRow({ code, parents, progress, agreement, selected, hasProposal, on
           </div>
         </div>
       )}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+function NewCodeForm({
+  parentId,
+  label,
+  onAdded,
+}: {
+  parentId: number | null;
+  label: string;
+  onAdded: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [definition, setDefinition] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.addCode({ name, definition, parent_code_id: parentId });
+      setName("");
+      setDefinition("");
+      setOpen(false);
+      await onAdded();
+    } catch (err) {
+      setError(errorDetail(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="add-code-button" onClick={() => setOpen(true)}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <div className="code-editor new-code">
+      <label>
+        Name
+        <input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+      </label>
+      <label>
+        Definition
+        <textarea rows={3} value={definition} onChange={(e) => setDefinition(e.target.value)} />
+      </label>
+      <p className="muted">Find more works for it once its query is embedded (Update embeddings).</p>
+      <div>
+        <button onClick={add} disabled={saving || !name.trim()}>
+          {saving ? "Adding…" : "Add"}
+        </button>{" "}
+        <button onClick={() => setOpen(false)} disabled={saving}>
+          Cancel
+        </button>
+      </div>
       {error && <p className="error">{error}</p>}
     </div>
   );

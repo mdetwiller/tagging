@@ -16,6 +16,16 @@ class CodeEdit(BaseModel):
     status: Literal["ACTIVE", "RETIRED"] | None = None
 
 
+class NewCode(BaseModel):
+    name: str
+    definition: str = ""
+    parent_code_id: int | None = None
+
+
+class NewVersion(BaseModel):
+    name: str
+
+
 class EmbedRequest(BaseModel):
     """The embedding job is paid, so it runs only when `confirm` is true."""
 

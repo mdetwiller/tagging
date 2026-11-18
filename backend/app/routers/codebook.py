@@ -8,14 +8,16 @@ from sqlalchemy.orm import Session
 
 from ..db import get_tagging_db
 from ..models import Code, CodeExemplar, Codebook, Coding
-from ..schemas import CodeEdit, FamilyNoteRequest
+from ..schemas import CodeEdit, FamilyNoteRequest, NewCode, NewVersion
 from ..services.codebook_edit import CodeEditError, CodeNotFound, edit_code, list_revisions
 from ..services.codebook_import import CodebookFormatError, import_reconciled
+from ..services import versions
 from ..services.export import _iso
 from ..services.family_notes import NotAFamily, NoteConflict, NoteCodeNotFound, current_notes, get_note, save_note
 
 router = APIRouter(prefix="/codebooks", tags=["codebooks"])
 codes_router = APIRouter(prefix="/codes", tags=["codes"])
+versions_router = APIRouter(prefix="/codebook_versions", tags=["codebook versions"])
 
 
 @router.post("/import")
@@ -180,3 +182,65 @@ def put_family_note(code_id: int, body: FamilyNoteRequest, db: Session = Depends
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except NoteConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@codes_router.post("", status_code=201)
+def add_code(body: NewCode, db: Session = Depends(get_tagging_db)) -> dict:
+    try:
+        code = versions.add_code(db, body.name, body.definition, body.parent_code_id)
+    except versions.NoCodebook as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CodeEditError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_code(code, {}, [], set())
+
+
+def _serialize_version(v) -> dict:
+    return {
+        "id": v.id,
+        "name": v.name,
+        "source": v.source,
+        "restored_version_id": v.restored_version_id,
+        "code_count": len(v.snapshot.get("codes", {})),
+        "created_at": _iso(v.created_at),
+    }
+
+
+def _version_errors(exc: Exception) -> HTTPException:
+    if isinstance(exc, (versions.NoCodebook, versions.VersionNotFound)):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, versions.VersionConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@versions_router.get("")
+def list_versions(db: Session = Depends(get_tagging_db)) -> list[dict]:
+    try:
+        return [_serialize_version(v) for v in versions.list_versions(db)]
+    except versions.NoCodebook as exc:
+        raise _version_errors(exc) from exc
+
+
+@versions_router.post("", status_code=201)
+def save_version(body: NewVersion, db: Session = Depends(get_tagging_db)) -> dict:
+    try:
+        return _serialize_version(versions.save_version(db, body.name))
+    except (versions.NoCodebook, CodeEditError) as exc:
+        raise _version_errors(exc) from exc
+
+
+@versions_router.get("/{version_id}/diff")
+def version_diff(version_id: int, db: Session = Depends(get_tagging_db)) -> list[dict]:
+    try:
+        return versions.diff(db, version_id)
+    except (versions.NoCodebook, versions.VersionNotFound, versions.VersionConflict) as exc:
+        raise _version_errors(exc) from exc
+
+
+@versions_router.post("/{version_id}/restore")
+def restore_version(version_id: int, db: Session = Depends(get_tagging_db)) -> dict:
+    try:
+        return versions.restore(db, version_id)
+    except (versions.NoCodebook, versions.VersionNotFound, versions.VersionConflict) as exc:
+        raise _version_errors(exc) from exc

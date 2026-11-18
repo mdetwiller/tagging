@@ -12,7 +12,7 @@ probability per code, and lets the researcher accept, reject and apply codes in 
 per-code agreement and a JSON export. The stack is FastAPI + SQLAlchemy (`backend/`) and
 React 19 + Vite + TypeScript (`frontend/`). Source data is `../acp_pipeline_snapshot.db`
 (read-only); everything the app writes goes to `db/tagging.db` and `data/embeddings/`.
-Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `milestone-2` branch.
+Milestones 1 and 2 (drift proposals), highlight marks (facilitator turns, stars) and codebook versions are merged to `main`.
 
 ## 2. Development commands
 
@@ -23,7 +23,7 @@ Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `mi
 | Run backend | `cd backend && .venv/bin/uvicorn app.main:app --port 8010` (no `--reload`; `GET /health` returns `{"ok":true}`) |
 | Stop backend | `lsof -ti tcp:8010 \| xargs kill` (stop by port, because `--reload` workers orphan and don't show as uvicorn) |
 | Run frontend | `cd frontend && npm run dev`, then open http://localhost:5176 |
-| Test | `cd backend && .venv/bin/python -m pytest -q` (217 tests, about 5 s) |
+| Test | `cd backend && .venv/bin/python -m pytest -q` (221 tests, about 5 s) |
 | Typecheck | `cd frontend && npx tsc -b --noEmit` |
 | Lint | `cd frontend && npm run lint` (oxlint; exits 0 with no warnings) |
 | Build | `cd frontend && npm run build` |
@@ -40,8 +40,8 @@ Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `mi
 |---|---|
 | Never write to `../acp_pipeline_snapshot.db`. It is opened only as `sqlite:///file:<path>?mode=ro&immutable=1&uri=true` with `PRAGMA query_only = ON`; never `add()` or `commit()` through the Cortico session. | It is the source data, shared with Notes in the Margin. |
 | Snapshot path comes from `cortico_db_path` in `backend/config.yaml`; the tagging DB from `TAGGING_DB_PATH`, default `db/tagging.db`. | One place to repoint both. |
-| Rows in `coding`, `code`, `code_revision`, `highlight_status`, `family_note`, `code_rules`, `drift_proposal`, `proposal_score` and `highlight_mark` are never deleted. Retiring, rejecting and removing are new rows or status changes; a family note's current text, a code's current include/exclude rules, and a highlight's current star or facilitator mark, are its newest row. | Judgments and codebook edits must stay auditable. |
-| Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first. | The revision history goes into the export. |
+| Rows in `coding`, `code`, `code_revision`, `highlight_status`, `family_note`, `code_rules`, `drift_proposal`, `proposal_score`, `highlight_mark` and `codebook_version` are never deleted. Retiring, rejecting and removing are new rows or status changes; a family note's current text, a code's current include/exclude rules, and a highlight's current star or facilitator mark, are its newest row. | Judgments and codebook edits must stay auditable. |
+| Rename, move, definition edit, threshold edit and retire each write a `code_revision` row first; so do adding a code (field `created`) and each field a version restore changes (`services/versions.py`). | The revision history goes into the export. |
 | Every AI row has `is_ai_generated=True`, `status="suggested"`, and `ai_metadata` with at least `model`, `run_id`, `question_instructions_hash`. | Only the user files judgments, and every AI row must be traceable to its run and prompt. |
 | Single user: `config.user_id = 101` is used for `created_by`. | There is no auth. |
 | Thresholds (default 0.5), search settings (`max_tries_per_code`, `target_positives`, `hard_to_find_below`, `random_share`, `jev_concurrency`, `sample_size`) and the star cap (`jev.max_starred_examples`, 5) and drift settings (`model`, `reasoning_effort`, `daily_token_cap`, `max_judged_examples`, `timeout_seconds`, `merge_rules`) live in `backend/config.yaml`; never hard-code them in services. | The user tunes them without code changes. |
@@ -82,4 +82,4 @@ Milestone 1 is complete; milestone 2 (drift proposals) is implemented on the `mi
 | `ai-sensemaking-prototype/` | Cortico reference code. Gitignored; never modify it. |
 
 - **Drift check:** `onSessionEnd(codeId, count)` from `frontend/src/components/ReviewPane.tsx` (`count` = distinct highlights judged for that code in the session; fires on "Done reviewing" or on leaving after `SESSION_END_MIN_JUDGMENTS = 5`) calls `api.drift` in `App.tsx`, fire-and-forget with at most one request in flight per code. Proposals live in App state per code; the review shows them in `components/ProposalPanel.tsx`.
-- **Git:** there is no remote. Commit on a branch, never push.
+- **Git:** the remote is `github.com/mdetwiller/tagging` (public). Commit on a branch, never on `main`; never push, open a PR or merge without the user asking, and only merge PRs this session opened.

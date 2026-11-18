@@ -86,6 +86,12 @@ each code's tagging prompt improves from those judgments.
   Cohen's kappa over highlights with both judgments.
 - A review session ends on "Done reviewing", or on leaving the code's view after at least 5
   new judgments. (Milestone 2 hangs the drift check on this.)
+- Codebook versions (table `codebook_version`, never deleted): a named snapshot of the current
+  codebook's codes (name, definition, threshold, parent, status) and rules. Restore shows the
+  changes first, saves the current state as a `before_restore` version, then writes each
+  changed field as a `code_revision` (rules as `code_rules` with source `restore`) and retires
+  codes added since. Judgments are untouched; a renamed or redefined code's query goes stale.
+  "+ code" and "+ child" add codes (`code_revision` field `created`).
 - Highlight marks (table `highlight_mark`, append-only; the newest row per kind, highlight and
   code is current):
   - **Facilitator turn** ("Facilitator" on a row) applies to every code. The highlight leaves
