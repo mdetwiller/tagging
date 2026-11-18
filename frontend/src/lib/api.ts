@@ -1,10 +1,11 @@
 import type {
   AcceptProposalRequest,
   Agreement,
-  Codebook,
   CodeEdit,
   CodeOut,
   CodeRevision,
+  Codebook,
+  CodebookVersion,
   DriftResult,
   DriftSpend,
   EmbedResult,
@@ -14,12 +15,14 @@ import type {
   HighlightStatusResult,
   ImportResult,
   JudgmentRequest,
+  NewCode,
   Proposal,
   ReviewData,
   RunOverview,
   RunStarted,
   RunStatus,
   ScoreStarted,
+  VersionChange,
 } from "./types";
 
 // Fixed: the backend's CORS allows only http://localhost:5176, and there is no Vite proxy.
@@ -72,6 +75,15 @@ export const api = {
     return request<ImportResult>("/codebooks/import", { method: "POST", body: form });
   },
   currentCodebook: () => request<Codebook>("/codebooks/current"),
+  addCode: (body: NewCode) => request<CodeOut>("/codes", { method: "POST", body: JSON.stringify(body) }),
+  versions: () => request<CodebookVersion[]>("/codebook_versions"),
+  saveVersion: (name: string) =>
+    request<CodebookVersion>("/codebook_versions", { method: "POST", body: JSON.stringify({ name }) }),
+  versionDiff: (id: number) => request<VersionChange[]>(`/codebook_versions/${id}/diff`),
+  restoreVersion: (id: number) =>
+    request<{ saved_version_id: number; changed_codes: number }>(`/codebook_versions/${id}/restore`, {
+      method: "POST",
+    }),
   editCode: (id: number, changes: CodeEdit) =>
     request<CodeOut>(`/codes/${id}`, { method: "PATCH", body: JSON.stringify(changes) }),
   codeRevisions: (id: number) => request<CodeRevision[]>(`/codes/${id}/revisions`),

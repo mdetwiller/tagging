@@ -6,6 +6,7 @@ import SetupPanel from "./components/SetupPanel";
 import RunControls from "./components/RunControls";
 import CodeList from "./components/CodeList";
 import ReviewPane from "./components/ReviewPane";
+import VersionsPanel from "./components/VersionsPanel";
 import type { DriftState } from "./components/ProposalPanel";
 
 function findCode(codes: CodeOut[], id: number | null): CodeOut | null {
@@ -152,6 +153,12 @@ export default function App() {
     [refreshAll, refreshProposals]
   );
 
+  // A restore can change any code, so every loaded code's proposals are refetched for their stale marks.
+  const onRestored = useCallback(async () => {
+    await refreshAll();
+    await Promise.all(Object.keys(proposals).map((id) => refreshProposals(Number(id))));
+  }, [refreshAll, refreshProposals, proposals]);
+
   const proposalCodeIds = useMemo(
     () =>
       new Set(
@@ -222,6 +229,7 @@ export default function App() {
             Drift tokens today: {spend.today_tokens.toLocaleString()} of {spend.cap_tokens.toLocaleString()}
           </p>
         )}
+        {codebook && <VersionsPanel codebook={codebook} onRestored={onRestored} />}
         {codebook === undefined && <p className="muted">Loading codebook…</p>}
         {codebook && (
           <CodeList

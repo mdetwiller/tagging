@@ -61,6 +61,19 @@ Ports are fixed: backend 8010, frontend 5176 (`strictPort`; CORS allows only
    and Find more's random picks), and a collapsed "Below threshold" section (Find more's other similarity
    picks, including unscored ones). Each row is labelled sample, search or random.
 
+Editing the codebook: each code has Edit (name, definition, threshold, move) and Retire.
+"+ code" above the list adds a top-level code and "+ child" under a family adds a child
+(`POST /codes`); a new code needs its query embedded ("Update embeddings") before Find more
+works for it.
+
+Versions (sidebar): "Save version" stores every code's name, definition, threshold, parent,
+status and include/exclude rules under a name (`POST /codebook_versions`). "Restore…" lists
+what would change (`GET /codebook_versions/{id}/diff`), then restores it: each changed field
+is a `code_revision` row, rules a `code_rules` row with source `restore`, and codes added since
+are retired. Judgments are untouched. The state just before is saved first as an "(auto)"
+version, so restoring that one undoes the restore. Only the current codebook's versions are
+listed or restorable.
+
 Two marks on a review row:
 - "Facilitator" marks the highlight as a facilitator turn for every code: it leaves every
   review, future sample runs and Find more, agreement, drift and "Test with Jev", and is never
@@ -101,7 +114,7 @@ restored when the note is reopened. The export carries the current non-empty not
 ## Test
 
 ```
-cd backend && .venv/bin/python -m pytest -q        # 217 tests, about 5 s
+cd backend && .venv/bin/python -m pytest -q        # 221 tests, about 5 s
 cd frontend && npx tsc -b --noEmit && npm run lint && npm run build
 ```
 

@@ -279,3 +279,35 @@ export interface AcceptProposalRequest {
   parts: ProposalPart[];
   values?: Partial<CodeValues>;
 }
+
+/** A saved copy of the current codebook's codes and rules (GET /codebook_versions). */
+export interface CodebookVersion {
+  id: number;
+  name: string;
+  /** "before_restore" is saved automatically just before a restore. */
+  source: "user" | "before_restore";
+  restored_version_id: number | null;
+  code_count: number;
+  created_at: string;
+}
+
+export interface VersionFieldChange {
+  field: "name" | "definition" | "threshold" | "parent_code_id" | "status" | "rules";
+  before: unknown;
+  after: unknown;
+}
+
+/** One code that restoring a version would change (GET /codebook_versions/{id}/diff). */
+export interface VersionChange {
+  code_id: number;
+  name: string;
+  /** "retire_added": the code was added after the version was saved. */
+  kind: "edit" | "retire_added";
+  changes: VersionFieldChange[];
+}
+
+export interface NewCode {
+  name: string;
+  definition: string;
+  parent_code_id: number | null;
+}

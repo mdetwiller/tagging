@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(codebook.router)
 app.include_router(codebook.codes_router)
+app.include_router(codebook.versions_router)
 app.include_router(embeddings.router)
 app.include_router(runs.router)
 app.include_router(review.router)

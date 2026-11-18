@@ -139,7 +139,7 @@ class CodeRules(Base):
     code_id = Column(Integer, ForeignKey("code.id"), nullable=False, index=True)
     include = Column(JSON, nullable=False, default=list)
     exclude = Column(JSON, nullable=False, default=list)
-    source = Column(String, nullable=False)  # proposal | rollback | user
+    source = Column(String, nullable=False)  # proposal | rollback | user | restore
     proposal_id = Column(Integer)  # the drift_proposal that set these rules, if any
     created_at = Column(DateTime, nullable=False, default=_now)
 
@@ -194,5 +194,21 @@ class HighlightMark(Base):
     highlight_id = Column(Integer, nullable=False, index=True)
     code_id = Column(Integer, ForeignKey("code.id"), index=True)
     active = Column(Boolean, nullable=False)
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_now)
+
+
+class CodebookVersion(Base):
+    """A saved copy of a codebook's codes and rules, to restore later. Rows are never deleted."""
+
+    __tablename__ = "codebook_version"
+
+    id = Column(Integer, primary_key=True)
+    codebook_id = Column(Integer, ForeignKey("codebook.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    # {"codes": {"<code_id>": {name, definition, threshold, parent_code_id, status, include, exclude}}}
+    snapshot = Column(JSON, nullable=False)
+    source = Column(String, nullable=False)  # user | before_restore
+    restored_version_id = Column(Integer)  # for before_restore: the version being restored
     created_by = Column(Integer, nullable=False)
     created_at = Column(DateTime, nullable=False, default=_now)
