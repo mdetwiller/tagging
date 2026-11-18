@@ -12,7 +12,7 @@ probability per code, and lets the researcher accept, reject and apply codes in 
 per-code agreement and a JSON export. The stack is FastAPI + SQLAlchemy (`backend/`) and
 React 19 + Vite + TypeScript (`frontend/`). Source data is `../acp_pipeline_snapshot.db`
 (read-only); everything the app writes goes to `db/tagging.db` and `data/embeddings/`.
-Milestones 1 and 2 (drift proposals) and highlight marks (facilitator turns, stars) are merged to `main`.
+Milestones 1 and 2 (drift proposals), highlight marks (facilitator turns, stars) and codebook versions are merged to `main`.
 
 ## 2. Development commands
 
